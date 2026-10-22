@@ -45,6 +45,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jsoup:jsoup:1.18.3")
 
     // Models are downloaded once; translation can work offline afterwards.
     implementation("com.google.mlkit:translate:17.0.3")
