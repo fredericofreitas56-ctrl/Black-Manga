@@ -1,9 +1,12 @@
 package com.blackmanga.app
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -33,6 +36,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -66,6 +70,8 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import org.json.JSONTokener
 import java.net.URI
 import java.net.URL
@@ -266,6 +272,59 @@ private fun LibraryScreen(
                 }
             }
         }
+    }
+}
+
+
+private data class TranslationHistoryItem(
+    val original: String,
+    val translated: String,
+    val sourceLanguage: String,
+    val savedAt: Long
+)
+
+private object TranslationHistoryStore {
+    private const val PREFS_NAME = "black_manga"
+    private const val HISTORY_KEY = "translation_history_v1"
+    private const val MAX_ITEMS = 8
+
+    fun load(context: Context): List<TranslationHistoryItem> {
+        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(HISTORY_KEY, "[]") ?: "[]"
+        return try {
+            val array = JSONArray(raw)
+            (0 until array.length()).mapNotNull { index ->
+                val item = array.optJSONObject(index) ?: return@mapNotNull null
+                val original = item.optString("original", "")
+                val translated = item.optString("translated", "")
+                if (original.isBlank() || translated.isBlank()) null
+                else TranslationHistoryItem(
+                    original = original,
+                    translated = translated,
+                    sourceLanguage = item.optString("sourceLanguage", "Japonês"),
+                    savedAt = item.optLong("savedAt", 0L)
+                )
+            }.take(MAX_ITEMS)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun save(context: Context, items: List<TranslationHistoryItem>) {
+        val array = JSONArray()
+        items.take(MAX_ITEMS).forEach { item ->
+            array.put(
+                JSONObject()
+                    .put("original", item.original)
+                    .put("translated", item.translated)
+                    .put("sourceLanguage", item.sourceLanguage)
+                    .put("savedAt", item.savedAt)
+            )
+        }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(HISTORY_KEY, array.toString())
+            .apply()
     }
 }
 
@@ -649,6 +708,45 @@ private fun TranslationScreen(initialText: String) {
     var status by remember { mutableStateOf("O modelo pode funcionar offline depois de ser baixado.") }
     var sourceIsJapanese by remember { mutableStateOf(true) }
     var working by remember { mutableStateOf(false) }
+    val history = remember(context) {
+        mutableStateListOf<TranslationHistoryItem>().apply {
+            addAll(TranslationHistoryStore.load(context))
+        }
+    }
+
+    fun copyCurrentTranslation() {
+        if (resultText.isBlank()) return
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Black Manga", resultText))
+        Toast.makeText(context, "Tradução copiada.", Toast.LENGTH_SHORT).show()
+    }
+
+    fun saveCurrentTranslation() {
+        if (sourceText.isBlank() || resultText.isBlank()) {
+            status = "Traduz primeiro algum texto para o poderes guardar."
+            return
+        }
+        val entry = TranslationHistoryItem(
+            original = sourceText.trim().take(8000),
+            translated = resultText.trim().take(8000),
+            sourceLanguage = if (sourceIsJapanese) "Japonês" else "Inglês",
+            savedAt = System.currentTimeMillis()
+        )
+        val updated = (listOf(entry) + history.filterNot {
+            it.original == entry.original && it.translated == entry.translated
+        }).take(8)
+        history.clear()
+        history.addAll(updated)
+        TranslationHistoryStore.save(context, updated)
+        status = "Tradução guardada neste dispositivo."
+        Toast.makeText(context, "Tradução guardada.", Toast.LENGTH_SHORT).show()
+    }
+
+    fun clearTranslationHistory() {
+        history.clear()
+        TranslationHistoryStore.save(context, emptyList())
+        status = "Histórico apagado."
+    }
 
     fun translateCurrentText(text: String) {
         if (text.isBlank()) {
@@ -760,6 +858,51 @@ private fun TranslationScreen(initialText: String) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("TRADUÇÃO", color = accentColor, fontWeight = FontWeight.Bold)
                 Text(if (resultText.isBlank()) "O texto traduzido aparecerá aqui." else resultText)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { copyCurrentTranslation() },
+                enabled = resultText.isNotBlank(),
+                modifier = Modifier.weight(1f)
+            ) { Text("Copiar tradução") }
+            OutlinedButton(
+                onClick = { saveCurrentTranslation() },
+                enabled = resultText.isNotBlank() && sourceText.isNotBlank(),
+                modifier = Modifier.weight(1f)
+            ) { Text("Guardar") }
+        }
+        if (history.isNotEmpty()) {
+            Divider(color = Color(0xFF373640))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("HISTÓRICO LOCAL (" + history.size + ")", color = accentColor, fontWeight = FontWeight.Bold)
+                OutlinedButton(onClick = { clearTranslationHistory() }) { Text("Limpar") }
+            }
+            Text("As traduções ficam guardadas apenas neste dispositivo. Toca em Recuperar para voltar a ver uma delas.", color = mutedColor, fontSize = 12.sp)
+            history.take(5).forEach { item ->
+                Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = surfaceColor)) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Origem: " + item.sourceLanguage, color = accentColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Original", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(item.original, color = mutedColor, fontSize = 13.sp, maxLines = 3)
+                        Divider(color = Color(0xFF373640))
+                        Text("Tradução", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(item.translated, fontSize = 13.sp, maxLines = 4)
+                        OutlinedButton(
+                            onClick = {
+                                sourceText = item.original
+                                resultText = item.translated
+                                sourceIsJapanese = item.sourceLanguage == "Japonês"
+                                status = "Tradução recuperada do histórico."
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Recuperar tradução") }
+                    }
+                }
             }
         }
         Text(status, color = mutedColor, fontSize = 12.sp)
