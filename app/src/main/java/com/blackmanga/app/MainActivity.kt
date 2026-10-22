@@ -200,7 +200,7 @@ private fun BlackMangaApp() {
                 2 -> SourcesScreen(
                     sources = savedSources,
                     onOpenUrl = { activeWebUrl = it },
-                    onOpenCatalog = { activeCatalogUrl = it }
+                    onOpenCatalog = { if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else activeCatalogUrl = it }
                 )
                 else -> TranslationScreen(initialText = translationInput)
             }
@@ -386,7 +386,7 @@ private fun SourcesScreen(
     ) {
         Text("Fontes e sites", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Text(
-            "As fontes compatíveis com OPDS abrem numa lista integrada, parecida com um catálogo de manga. Um site comum precisa de um adaptador específico para aparecer assim.",
+            "Fontes OPDS abrem como catálogo. O Nexus Toons usa o adaptador próprio para tentar encontrar mangas e capítulos.",
             color = mutedColor
         )
         OutlinedTextField(
@@ -407,7 +407,7 @@ private fun SourcesScreen(
                 onClick = { onOpenCatalog(url.trim()) },
                 enabled = url.trim().startsWith("https://", ignoreCase = true),
                 modifier = Modifier.weight(1f)
-            ) { Text("Testar leitor integrado (OPDS)") }
+            ) { Text("Explorar fonte integrada") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
