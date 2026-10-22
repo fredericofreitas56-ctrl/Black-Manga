@@ -220,7 +220,7 @@ private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit) {
         }
         Text("FUNÇÕES PRINCIPAIS", fontWeight = FontWeight.Bold, color = accentColor)
         FeatureCard("Sites personalizados", "Insere uma URL HTTPS, testa se responde e guarda as tuas fontes.")
-        FeatureCard("Leitor web integrado", "Abre o site dentro do Black Manga e extrai o texto visível para tradução.")
+        FeatureCard("Catálogo integrado", "Abre fontes com suporte OPDS numa lista dentro da aplicação, sem mostrar a página do site. Sites comuns precisam de um adaptador específico.")
         FeatureCard("Tradução no dispositivo", "Depois de baixar o modelo de idioma, a tradução de texto pode funcionar sem internet.")
         FeatureCard("OCR de páginas", "Seleciona uma imagem para reconhecer texto japonês ou latino e traduzir o resultado.")
         Button(onClick = onGoToTranslate, modifier = Modifier.fillMaxWidth()) { Text("Abrir tradução") }
@@ -380,7 +380,7 @@ private fun SourcesScreen(
     ) {
         Text("Fontes e sites", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Text(
-            "Insere o endereço de um site. O teste verifica a ligação HTTPS; não verifica licenças nem cria automaticamente um adaptador de catálogo.",
+            "As fontes compatíveis com OPDS abrem numa lista integrada, parecida com um catálogo de manga. Um site comum precisa de um adaptador específico para aparecer assim.",
             color = mutedColor
         )
         OutlinedTextField(
@@ -401,7 +401,7 @@ private fun SourcesScreen(
                 onClick = { onOpenCatalog(url.trim()) },
                 enabled = url.trim().startsWith("https://", ignoreCase = true),
                 modifier = Modifier.weight(1f)
-            ) { Text("Explorar catálogo OPDS") }
+            ) { Text("Testar leitor integrado (OPDS)") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
@@ -454,8 +454,8 @@ private fun SourcesScreen(
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(savedUrl, fontSize = 14.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { onOpenUrl(savedUrl) }, modifier = Modifier.weight(1f)) { Text("Abrir no leitor") }
-                            Button(onClick = { onOpenCatalog(savedUrl) }, modifier = Modifier.weight(1f)) { Text("Explorar OPDS") }
+                            Button(onClick = { onOpenCatalog(savedUrl) }, modifier = Modifier.weight(1f)) { Text("Abrir no leitor") }
+                            Button(onClick = { onOpenUrl(savedUrl) }, modifier = Modifier.weight(1f)) { Text("Ver site") }
                             Button(
                                 onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(savedUrl))) },
                                 modifier = Modifier.weight(1f)
@@ -536,10 +536,11 @@ private fun CatalogScreen(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF402126))
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Não foi possível abrir como OPDS", fontWeight = FontWeight.Bold)
-                    Text(error, color = Color.White)
-                    Text("Isto não significa que o site esteja indisponível: pode ser um site comum sem catálogo OPDS.", color = Color.White, fontSize = 12.sp)
-                    Button(onClick = { onOpenWeb(currentUrl) }) { Text("Abrir como site normal") }
+                    Text("Esta fonte não tem um catálogo reconhecido", fontWeight = FontWeight.Bold)
+                    Text("A Black Manga tentou abrir a fonte no leitor integrado, mas não encontrou um catálogo OPDS compatível.", color = Color.White)
+                    Text("Para ficar parecida com o Kotatsu, esta fonte precisa de um adaptador próprio que saiba encontrar mangas e capítulos. A aplicação não vai abrir o site automaticamente neste modo.", color = Color.White, fontSize = 12.sp)
+                    Text("Detalhe técnico: " + error, color = mutedColor, fontSize = 11.sp)
+                    Button(onClick = onBack) { Text("Voltar às fontes") }
                 }
             }
         }
