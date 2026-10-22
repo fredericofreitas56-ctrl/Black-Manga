@@ -3,6 +3,7 @@ package com.blackmanga.app
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
 import java.net.URI
 
 internal data class NexusEntry(
@@ -22,8 +23,23 @@ internal data class NexusPage(
 internal object NexusToonsAdapter {
     private const val HOST = "nexustoons.com"
 
+    private val genericLabels = setOf(
+        "ver detalhes", "detalhes", "ler agora", "ler", "abrir", "ver mais",
+        "saiba mais", "continuar lendo", "read more", "view more", "view details",
+        "home", "início", "inicio", "menu", "pesquisar", "buscar"
+    )
+
+    private val excludedFirstPathSegments = setOf(
+        "categoria", "categorias", "category", "categories", "genero", "generos",
+        "genre", "genres", "tag", "tags", "search", "pesquisa", "pesquisar",
+        "busca", "login", "logout", "register", "registrar", "u", "user", "users",
+        "perfil", "profile", "conta", "account", "sobre", "contato", "contact",
+        "politica", "termos", "ranking", "notificacoes", "notifications",
+        "mangas", "manhwas", "manhuas", "novels", "obras", "catalogo", "explorar"
+    )
+
     fun supports(rawUrl: String): Boolean = try {
-        URI(rawUrl).host?.lowercase()?.let { it == HOST || it.endsWith(".$HOST") } == true
+        URI(rawUrl.trim()).host?.lowercase()?.let { it == HOST || it.endsWith(".$HOST") } == true
     } catch (_: Exception) {
         false
     }
@@ -33,79 +49,136 @@ internal object NexusToonsAdapter {
         require(uri.scheme.equals("https", true) && supports(rawUrl)) {
             "Usa uma URL HTTPS válida do Nexus Toons."
         }
+
         val document = Jsoup.connect(uri.toASCIIString())
             .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36")
-            .timeout(15000)
+            .timeout(20000)
             .followRedirects(true)
             .get()
 
-        val base = document.baseUri()
-        val images = document.select("img")
-            .mapNotNull { img ->
-                val candidate = img.absUrl("data-src").ifBlank {
-                    img.absUrl("data-lazy-src").ifBlank { img.absUrl("src") }
-                }
-                candidate.takeIf { it.startsWith("https://") && !it.contains("logo", true) }
-            }
-            .distinct()
-            .filterNot { it.contains("avatar", true) || it.contains("icon", true) }
+        val baseUri = URI(document.baseUri())
+        val baseHost = baseUri.host.orEmpty().lowercase()
+        val pageUrl = document.baseUri().ifBlank { uri.toASCIIString() }
 
-        val readerLike = uri.path.orEmpty().contains("cap", true) ||
-            uri.path.orEmpty().contains("chapter", true) ||
-            uri.path.orEmpty().contains("ler", true) ||
-            uri.path.orEmpty().contains("leitura", true)
+        fun absoluteImage(img: Element?): String? {
+            if (img == null) return null
+            val candidate = sequenceOf("data-src", "data-lazy-src", "data-original", "src")
+                .map { img.absUrl(it) }
+                .firstOrNull { it.startsWith("https://") && !it.contains("data:image", true) }
+            return candidate?.takeIf {
+                !it.contains("logo", true) && !it.contains("avatar", true) &&
+                    !it.contains("icon", true) && !it.contains("emoji", true)
+            }
+        }
+
+        fun cleaned(value: String?): String =
+            value.orEmpty().replace(Regex("\\s+"), " ").trim()
+
+        fun meaningfulHeading(parent: Element): String? =
+            parent.selectFirst("h1,h2,h3,h4,h5,h6,[class*=title],[class*=titulo]")
+                ?.let { cleaned(it.text()) }
+                ?.takeIf { it.length >= 2 && !isGeneric(it) }
+
+        fun isContentLink(link: String, label: String): Boolean {
+            val target = try { URI(link) } catch (_: Exception) { return false }
+            val host = target.host.orEmpty().lowercase()
+            if (host != baseHost && host != HOST && !host.endsWith(".$HOST")) return false
+            if (!target.scheme.equals("https", true)) return false
+
+            val segments = target.path.orEmpty().split('/').filter { it.isNotBlank() }
+            if (segments.isEmpty()) return false
+            if (segments.first().lowercase() in excludedFirstPathSegments) return false
+            if (segments.size == 1 && segments.first().lowercase() in setOf(
+                    "manga", "manhwa", "manhua", "novel", "comic", "obra", "capitulo"
+                )) return false
+            if (isGeneric(label)) return false
+            return label.length >= 2
+        }
+
+        fun titleForAnchor(anchor: Element): String {
+            val anchorText = cleaned(anchor.text())
+            val titleAttr = cleaned(anchor.attr("title")).ifBlank { cleaned(anchor.attr("aria-label")) }
+            val imageTitle = cleaned(anchor.selectFirst("img")?.attr("alt"))
+            if (anchorText.length >= 2 && anchorText.length <= 180 && !isGeneric(anchorText)) {
+                return anchorText
+            }
+
+            // Em vários cartões o link diz apenas "VER DETALHES", enquanto o título está no cabeçalho.
+            anchor.parents().take(8).forEach { parent ->
+                val heading = meaningfulHeading(parent)
+                if (!heading.isNullOrBlank()) return heading.take(180)
+            }
+            return sequenceOf(titleAttr, imageTitle, anchorText)
+                .map { cleaned(it) }
+                .firstOrNull { it.length >= 2 && !isGeneric(it) }
+                ?.take(180)
+                .orEmpty()
+        }
+
+        val currentNoQuery = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }
+        val anchors = document.select("a[href]")
+            .mapNotNull { anchor ->
+                val link = anchor.absUrl("href").substringBefore("#").trim()
+                if (link.isBlank()) return@mapNotNull null
+                val target = try { URI(link) } catch (_: Exception) { return@mapNotNull null }
+                val resolvedPath = target.path.orEmpty().trimEnd('/').ifBlank { "/" }
+                if (resolvedPath == currentNoQuery && target.rawQuery.isNullOrBlank()) return@mapNotNull null
+
+                val title = titleForAnchor(anchor)
+                if (!isContentLink(link, title)) return@mapNotNull null
+
+                val card = anchor.parents().take(8).firstOrNull { parent ->
+                    parent.selectFirst("h1,h2,h3,h4,h5,h6,[class*=title],[class*=titulo]") != null
+                } ?: anchor.parent()
+                val image = absoluteImage(anchor.selectFirst("img") ?: card?.selectFirst("img"))
+                val desc = cleaned(
+                    anchor.attr("title")
+                        .ifBlank { anchor.attr("aria-label") }
+                        .ifBlank { card?.selectFirst("p")?.text().orEmpty() }
+                ).take(300)
+
+                NexusEntry(title, link, image, desc)
+            }
+            .distinctBy { it.url }
+            .take(300)
+
+        val pathLower = uri.path.orEmpty().lowercase()
+        val readerLike = pathLower.contains("cap") || pathLower.contains("chapter") ||
+            pathLower.contains("leitura") || pathLower.contains("ler") ||
+            pathLower.contains("read") || pathLower.contains("episodio") ||
+            pathLower.contains("episode")
 
         val pageImages = if (readerLike) {
             document.select("img")
                 .filter { img ->
-                    val cls = (img.className() + " " + img.id()).lowercase()
-                    val src = img.absUrl("data-src").ifBlank { img.absUrl("src") }
-                    src.startsWith("https://") &&
-                        (cls.contains("chapter") || cls.contains("page") || cls.contains("reading") ||
-                            cls.contains("wp-manga") || img.attr("width").toIntOrNull()?.let { it > 250 } == true)
+                    val classes = (img.className() + " " + img.id()).lowercase()
+                    absoluteImage(img) != null && (
+                        classes.contains("chapter") || classes.contains("page") ||
+                            classes.contains("reading") || classes.contains("wp-manga") ||
+                            classes.contains("manga-page") ||
+                            img.attr("width").toIntOrNull()?.let { it > 250 } == true
+                        )
                 }
-                .mapNotNull { img ->
-                    img.absUrl("data-src").ifBlank {
-                        img.absUrl("data-lazy-src").ifBlank { img.absUrl("src") }
-                    }.takeIf { it.startsWith("https://") }
-                }
+                .mapNotNull { absoluteImage(it) }
                 .distinct()
+                .take(100)
         } else emptyList()
 
-        val anchors = document.select("a[href]")
-            .mapNotNull { a ->
-                val link = a.absUrl("href").substringBefore("#")
-                val label = a.text().trim().replace(Regex("\\s+"), " ")
-                    .ifBlank { a.selectFirst("img")?.attr("alt").orEmpty().trim() }
-                if (label.length < 2 || link.isBlank() || !link.startsWith("https://")) null
-                else {
-                    val path = try { URI(link).path.orEmpty() } catch (_: Exception) { "" }
-                    val looksLikeContent = path.contains("/manga", true) ||
-                        path.contains("/manhwa", true) || path.contains("/manhua", true) ||
-                        path.contains("/obra", true) || path.contains("/comic", true) ||
-                        path.contains("/cap", true) || path.contains("/chapter", true) ||
-                        path.contains("/ler", true) || path.contains("/leitura", true) ||
-                        path.contains("/biblioteca", true)
-                    if (!looksLikeContent || link.trimEnd('/') == rawUrl.trimEnd('/')) null
-                    else {
-                        val img = a.selectFirst("img")
-                        val imgUrl = img?.let {
-                            it.absUrl("data-src").ifBlank { it.absUrl("data-lazy-src").ifBlank { it.absUrl("src") } }
-                        }?.takeIf { it.startsWith("https://") }
-                        val desc = a.attr("title").ifBlank { img?.attr("alt").orEmpty() }
-                        NexusEntry(label.take(180), link, imgUrl, desc.take(300))
-                    }
-                }
-            }
-            .distinctBy { it.url }
-            .take(100)
-
+        val allImages = document.select("img").mapNotNull { absoluteImage(it) }.distinct()
         NexusPage(
-            title = document.selectFirst("h1")?.text()?.takeIf { it.isNotBlank() }
-                ?: document.title().ifBlank { "Nexus Toons" },
-            url = base,
+            title = document.selectFirst("h1")?.text()?.let { cleaned(it) }?.takeIf { it.isNotBlank() }
+                ?: document.title().let { cleaned(it) }.ifBlank { "Nexus Toons" },
+            url = pageUrl,
             entries = anchors,
-            readerImages = pageImages.ifEmpty { if (readerLike) images.take(80) else emptyList() }
+            readerImages = pageImages.ifEmpty { if (readerLike) allImages.take(100) else emptyList() }
         )
+    }
+
+    private fun isGeneric(value: String): Boolean {
+        val normalized = value.replace(Regex("[^\\p{L}\\p{N} ]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .lowercase()
+        return normalized in genericLabels
     }
 }
