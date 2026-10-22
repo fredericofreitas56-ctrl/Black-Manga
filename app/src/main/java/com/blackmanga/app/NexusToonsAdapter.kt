@@ -35,7 +35,7 @@ internal object NexusToonsAdapter {
         "busca", "login", "logout", "register", "registrar", "u", "user", "users",
         "perfil", "profile", "conta", "account", "sobre", "contato", "contact",
         "politica", "termos", "ranking", "notificacoes", "notifications",
-        "mangas", "manhwas", "manhuas", "novels", "obras", "catalogo", "explorar"
+        "novels", "obras", "catalogo", "explorar"
     )
 
     fun supports(rawUrl: String): Boolean = try {
