@@ -279,7 +279,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     domFallbackLoading = false
                                     needsDomFallback = false
                                     domFallbackMessage = if (combinedEntries.isEmpty() && combinedImages.isEmpty()) {
-                                        "O site abriu, mas não forneceu títulos reconhecíveis. Tenta usar a página inicial do Nexus Toons."
+                                        data.optString("debug", "O site abriu, mas não forneceu títulos reconhecíveis.") +
+                                            " Tenta usar a página inicial do Nexus Toons."
                                     } else ""
                                 }
                             }
@@ -296,7 +297,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 }
             )
             Text(
-                "A procurar títulos na versão apresentada pelo site…",
+                "A procurar títulos e ligações na página apresentada pelo site…",
                 color = Color(0xFFB8B5C5),
                 fontSize = 11.sp
             )
@@ -310,42 +311,83 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
 
 private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
 (function() {
+  const rootDomain = h => {
+    h = (h || '').toLowerCase().replace(/^www\\./, '');
+    return h === 'nexustoons.com' || h.endsWith('.nexustoons.com');
+  };
   const generic = /^(ver detalhes|detalhes|ler agora|ler|abrir|ver mais|saiba mais|continuar lendo|read more|view more|view details|home|in[ií]cio|menu|pesquisar|buscar)$/i;
   const banned = new Set(['categoria','categorias','category','categories','genero','generos','genre','genres','tag','tags','search','pesquisa','pesquisar','busca','login','logout','register','registrar','u','user','users','perfil','profile','conta','account','sobre','contato','contact','politica','termos','ranking','notificacoes','notifications','novels','obras','catalogo','explorar']);
   const entries = [];
   const seen = new Set();
   const tidy = s => (s || '').replace(/\\s+/g, ' ').trim();
-  for (const a of document.querySelectorAll('a[href]')) {
-    let u;
-    try { u = new URL(a.href, location.href); } catch(e) { continue; }
-    if (u.protocol !== 'https:' || u.hostname.toLowerCase() !== location.hostname.toLowerCase()) continue;
+  const urlOf = a => {
+    try { return new URL(a.href || a.getAttribute('href') || '', location.href); }
+    catch(e) { return null; }
+  };
+  const allowedLink = a => {
+    const u = urlOf(a);
+    if (!u || u.protocol !== 'https:' || !rootDomain(u.hostname)) return false;
     const parts = u.pathname.split('/').filter(Boolean);
-    if (!parts.length || banned.has(parts[0].toLowerCase())) continue;
-    let title = tidy(a.innerText || a.textContent || '');
-    if (title.length > 180 || generic.test(title) || title.length < 2) {
-      let parent = a;
-      for (let i = 0; i < 8 && parent; i++, parent = parent.parentElement) {
-        const h = parent.querySelector('h1,h2,h3,h4,h5,h6,[class*="title"],[class*="titulo"]');
-        const candidate = h ? tidy(h.innerText || h.textContent) : '';
-        if (candidate.length >= 2 && candidate.length <= 180 && !generic.test(candidate)) {
-          title = candidate; break;
-        }
-      }
-    }
-    if (title.length < 2 || title.length > 180 || generic.test(title)) continue;
+    if (!parts.length || banned.has(parts[0].toLowerCase())) return false;
+    if (u.href.split('#')[0] === location.href.split('#')[0]) return false;
+    return true;
+  };
+  const add = (title, anchor, source) => {
+    title = tidy(title);
+    const u = anchor ? urlOf(anchor) : null;
+    if (!u || !allowedLink(anchor) || title.length < 2 || title.length > 180 || generic.test(title)) return;
     const key = u.href.split('#')[0];
-    if (seen.has(key)) continue;
+    if (seen.has(key)) return;
     seen.add(key);
-    let parent = a;
-    let image = a.querySelector('img');
-    for (let i = 0; i < 5 && parent; i++, parent = parent.parentElement) {
-      if (!image && parent.querySelector('img')) image = parent.querySelector('img');
+    let node = anchor;
+    let image = anchor.querySelector('img');
+    let description = '';
+    for (let i = 0; i < 8 && node; i++, node = node.parentElement) {
+      if (!image && node.querySelector('img')) image = node.querySelector('img');
+      if (!description && node.querySelector('p')) description = tidy(node.querySelector('p').innerText || node.querySelector('p').textContent);
+      if (i > 0 && node.querySelectorAll('h1,h2,h3,h4,h5,h6').length > 3) break;
     }
     const imageUrl = image ? (image.currentSrc || image.src || image.getAttribute('data-src') || '') : '';
-    const description = parent && parent.querySelector ? tidy((parent.querySelector('p') || {}).innerText || '') : '';
-    entries.push({title: title, url: key, image: imageUrl, description: description.slice(0,300)});
-    if (entries.length >= 300) break;
+    entries.push({title:title, url:key, image:imageUrl, description:description.slice(0,300), source:source || 'link'});
+  };
+  const allAnchors = Array.from(document.querySelectorAll('a[href]'));
+  const sameSiteAnchors = allAnchors.filter(allowedLink);
+
+  // First pass: titles embedded in the link itself or in a nearby catalogue-card heading.
+  for (const a of sameSiteAnchors) {
+    let title = tidy(a.innerText || a.textContent || '');
+    if (title.length > 180 || generic.test(title) || title.length < 2) {
+      let node = a;
+      for (let i = 0; i < 10 && node; i++, node = node.parentElement) {
+        const headings = Array.from(node.querySelectorAll('h1,h2,h3,h4,h5,h6,[class*="title"],[class*="titulo"]'));
+        const candidate = headings.map(h => tidy(h.innerText || h.textContent)).find(t => t.length >= 2 && t.length <= 180 && !generic.test(t));
+        if (candidate) { title = candidate; break; }
+        if (i >= 3 && node.querySelectorAll('a[href]').length > 12) break;
+      }
+    }
+    if (title.length >= 2 && title.length <= 180 && !generic.test(title)) add(title, a, 'anchor');
   }
+
+  // Second pass: some layouts place the title heading beside the "VER DETALHES" link.
+  const headingNodes = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[class*="manga-title"],[class*="book-title"],[class*="series-title"],[class*="titulo"]'));
+  for (const h of headingNodes) {
+    const title = tidy(h.innerText || h.textContent);
+    if (title.length < 2 || title.length > 180 || generic.test(title)) continue;
+    let best = null;
+    let node = h;
+    for (let depth = 0; depth < 10 && node; depth++, node = node.parentElement) {
+      const links = Array.from(node.querySelectorAll('a[href]')).filter(allowedLink);
+      if (links.length) {
+        const details = links.find(a => /^(ver detalhes|detalhes|view details)$/i.test(tidy(a.innerText || a.textContent)));
+        const linkedHeading = h.closest('a[href]');
+        best = linkedHeading && allowedLink(linkedHeading) ? linkedHeading : (details || links[0]);
+        if (best) break;
+      }
+      if (depth >= 2 && node.querySelectorAll('h1,h2,h3,h4,h5,h6').length > 3) break;
+    }
+    if (best) add(title, best, 'heading');
+  }
+
   const path = location.pathname.toLowerCase();
   const isReader = /(cap|chapter|leitura|ler|read|episodio|episode)/.test(path);
   let readerImages = [];
@@ -353,16 +395,20 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     readerImages = Array.from(document.querySelectorAll('img')).map(img => {
       const cls = ((img.className || '') + ' ' + (img.id || '')).toLowerCase();
       const w = Number(img.getAttribute('width') || img.naturalWidth || 0);
-      return {url: img.currentSrc || img.src || img.getAttribute('data-src') || '', cls: cls, w: w};
+      return {url:img.currentSrc || img.src || img.getAttribute('data-src') || '', cls:cls, w:w};
     }).filter(x => x.url.startsWith('https://') &&
       (/(chapter|page|reading|wp-manga|manga-page)/.test(x.cls) || x.w > 250))
-      .map(x => x.url).filter((u, i, a) => a.indexOf(u) === i).slice(0,100);
+      .map(x => x.url).filter((u,i,a) => a.indexOf(u) === i).slice(0,100);
   }
-  const h = document.querySelector('h1');
-  return JSON.stringify({title: tidy(h ? h.innerText : document.title) || 'Nexus Toons', entries: entries, readerImages: readerImages});
+  const h1 = document.querySelector('h1');
+  return JSON.stringify({
+    title: tidy(h1 ? h1.innerText : document.title) || 'Nexus Toons',
+    entries: entries.slice(0,300),
+    readerImages: readerImages,
+    debug: 'Análise da página: ' + allAnchors.length + ' links, ' + sameSiteAnchors.length + ' links internos e ' + headingNodes.length + ' títulos de cabeçalho encontrados.'
+  });
 })();
 """
-
 private fun buildReaderHtml(title: String, images: List<String>): String {
     val safeTitle = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     val body = images.joinToString("\n") { url ->
