@@ -104,13 +104,33 @@ private fun BlackMangaApp() {
     val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(0) }
     var activeWebUrl by remember { mutableStateOf<String?>(null) }
+    var activeCatalogUrl by remember { mutableStateOf<String?>(null) }
     var translationInput by remember { mutableStateOf("") }
+    val savedManga = remember {
+        mutableStateListOf<SavedManga>().apply { addAll(BlackMangaLibrary.load(context)) }
+    }
     val savedSources = remember {
         mutableStateListOf<String>().apply {
             val saved = context.getSharedPreferences("black_manga", Context.MODE_PRIVATE)
                 .getStringSet("saved_sources", emptySet()).orEmpty()
             addAll(saved.sorted())
         }
+    }
+
+    if (activeCatalogUrl != null) {
+        CatalogScreen(
+            startUrl = activeCatalogUrl.orEmpty(),
+            savedItems = savedManga,
+            onBack = { activeCatalogUrl = null },
+            onOpenCatalog = { activeCatalogUrl = it },
+            onOpenWeb = { activeWebUrl = it; activeCatalogUrl = null },
+            onSave = { item ->
+                val updated = BlackMangaLibrary.add(context, item)
+                savedManga.clear()
+                savedManga.addAll(updated)
+            }
+        )
+        return
     }
 
     if (activeWebUrl != null) {
@@ -156,8 +176,20 @@ private fun BlackMangaApp() {
             }
             when (selectedTab) {
                 0 -> HomeScreen(onGoToSites = { selectedTab = 2 }, onGoToTranslate = { selectedTab = 3 })
-                1 -> LibraryScreen()
-                2 -> SourcesScreen(sources = savedSources, onOpenUrl = { activeWebUrl = it })
+                1 -> LibraryScreen(
+                    items = savedManga,
+                    onOpen = { activeWebUrl = it },
+                    onRemove = { id ->
+                        val updated = BlackMangaLibrary.remove(context, id)
+                        savedManga.clear()
+                        savedManga.addAll(updated)
+                    }
+                )
+                2 -> SourcesScreen(
+                    sources = savedSources,
+                    onOpenUrl = { activeWebUrl = it },
+                    onOpenCatalog = { activeCatalogUrl = it }
+                )
                 else -> TranslationScreen(initialText = translationInput)
             }
         }
@@ -205,17 +237,35 @@ private fun FeatureCard(title: String, body: String) {
 }
 
 @Composable
-private fun LibraryScreen() {
+private fun LibraryScreen(
+    items: List<SavedManga>,
+    onOpen: (String) -> Unit,
+    onRemove: (String) -> Unit
+) {
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("A tua biblioteca", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Text(
-            "A biblioteca de obras será preenchida quando ligares um catálogo com integração autorizada. Nesta versão inicial, já podes guardar fontes, abrir sites e traduzir texto.",
-            color = mutedColor
-        )
-        FeatureCard("Próxima etapa", "Adicionar adaptadores de catálogo autorizados e histórico de leitura.")
+        Text("Obras guardadas a partir de catálogos OPDS compatíveis.", color = mutedColor)
+        if (items.isEmpty()) {
+            FeatureCard("Biblioteca vazia", "Vai a Sites, introduz a URL de um catálogo OPDS autorizado e toca em Explorar catálogo.")
+        } else {
+            Text("${items.size} obra(s) guardada(s)", color = accentColor, fontWeight = FontWeight.Bold)
+            items.forEach { item ->
+                Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = surfaceColor)) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(item.title, fontWeight = FontWeight.Bold)
+                        if (item.summary.isNotBlank()) Text(item.summary, color = mutedColor, fontSize = 13.sp, maxLines = 4)
+                        Text(item.url, color = mutedColor, fontSize = 11.sp, maxLines = 2)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { onOpen(item.url) }, modifier = Modifier.weight(1f)) { Text("Abrir") }
+                            Button(onClick = { onRemove(item.id) }, modifier = Modifier.weight(1f)) { Text("Remover") }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -253,7 +303,11 @@ private fun checkWebsite(rawUrl: String): SiteCheck {
 }
 
 @Composable
-private fun SourcesScreen(sources: List<String>, onOpenUrl: (String) -> Unit) {
+private fun SourcesScreen(
+    sources: List<String>,
+    onOpenUrl: (String) -> Unit,
+    onOpenCatalog: (String) -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf("") }
@@ -282,6 +336,13 @@ private fun SourcesScreen(sources: List<String>, onOpenUrl: (String) -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = confirmsPermission, onCheckedChange = { confirmsPermission = it })
             Text("Confirmo que tenho autorização para utilizar esta fonte.", fontSize = 13.sp, color = mutedColor)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { onOpenCatalog(url.trim()) },
+                enabled = url.trim().startsWith("https://", ignoreCase = true),
+                modifier = Modifier.weight(1f)
+            ) { Text("Explorar catálogo OPDS") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
@@ -335,6 +396,7 @@ private fun SourcesScreen(sources: List<String>, onOpenUrl: (String) -> Unit) {
                         Text(savedUrl, fontSize = 14.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { onOpenUrl(savedUrl) }, modifier = Modifier.weight(1f)) { Text("Abrir no leitor") }
+                            Button(onClick = { onOpenCatalog(savedUrl) }, modifier = Modifier.weight(1f)) { Text("Explorar OPDS") }
                             Button(
                                 onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(savedUrl))) },
                                 modifier = Modifier.weight(1f)
@@ -345,6 +407,161 @@ private fun SourcesScreen(sources: List<String>, onOpenUrl: (String) -> Unit) {
             }
         }
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun CatalogScreen(
+    startUrl: String,
+    savedItems: List<SavedManga>,
+    onBack: () -> Unit,
+    onOpenCatalog: (String) -> Unit,
+    onOpenWeb: (String) -> Unit,
+    onSave: (SavedManga) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var currentUrl by remember(startUrl) { mutableStateOf(startUrl) }
+    var feed by remember { mutableStateOf<OpdsFeed?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    var query by remember { mutableStateOf("") }
+    var notice by remember { mutableStateOf("") }
+    var history by remember { mutableStateOf(listOf<String>()) }
+
+    fun loadCatalog(url: String, pushHistory: Boolean = true) {
+        scope.launch {
+            loading = true
+            error = ""
+            notice = ""
+            try {
+                val loaded = withContext(Dispatchers.IO) { OpdsCatalogClient.load(url) }
+                if (pushHistory && currentUrl != url) history = history + currentUrl
+                currentUrl = url
+                feed = loaded
+            } catch (e: Exception) {
+                error = e.localizedMessage ?: "Não foi possível ler este catálogo."
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(startUrl) { loadCatalog(startUrl, false) }
+
+    Column(modifier = Modifier.fillMaxSize().background(backgroundColor)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().background(surfaceColor).padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(onClick = {
+                if (history.isNotEmpty()) {
+                    val previous = history.last()
+                    history = history.dropLast(1)
+                    loadCatalog(previous, false)
+                } else onBack()
+            }) { Text("Voltar") }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Catálogo OPDS", fontWeight = FontWeight.Bold)
+                Text(currentUrl, color = mutedColor, fontSize = 10.sp, maxLines = 1)
+            }
+        }
+        if (loading) {
+            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center) {
+                CircularProgressIndicator()
+            }
+        }
+        if (error.isNotBlank()) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF402126))
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Não foi possível abrir como OPDS", fontWeight = FontWeight.Bold)
+                    Text(error, color = Color.White)
+                    Text("Isto não significa que o site esteja indisponível: pode ser um site comum sem catálogo OPDS.", color = Color.White, fontSize = 12.sp)
+                    Button(onClick = { onOpenWeb(currentUrl) }) { Text("Abrir como site normal") }
+                }
+            }
+        }
+        feed?.let { currentFeed ->
+            Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(currentFeed.title, fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                Text("${currentFeed.entries.size} entrada(s) neste catálogo", color = mutedColor, fontSize = 12.sp)
+                if (currentFeed.searchTemplate != null) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Pesquisar no catálogo") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None)
+                    )
+                    Button(
+                        onClick = {
+                            val target = OpdsCatalogClient.searchUrl(currentFeed.searchTemplate, query)
+                            if (target != null && query.isNotBlank()) loadCatalog(target)
+                            else notice = "Este catálogo não fornece um modelo de pesquisa utilizável."
+                        },
+                        enabled = query.isNotBlank() && !loading,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Pesquisar") }
+                } else {
+                    Text("Este catálogo não anunciou pesquisa. Podes navegar pelas secções abaixo.", color = mutedColor, fontSize = 12.sp)
+                }
+                if (notice.isNotBlank()) Text(notice, color = mutedColor)
+                currentFeed.entries.forEach { entry ->
+                    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = surfaceColor)) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(entry.title, fontWeight = FontWeight.Bold)
+                            if (entry.summary.isNotBlank()) Text(entry.summary, color = mutedColor, fontSize = 13.sp, maxLines = 4)
+                            val saved = savedItems.any { it.id == entry.id || it.url == (entry.openLink?.href ?: "") }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        val link = entry.openLink
+                                        if (link == null) notice = "Esta entrada não contém um endereço que possas abrir."
+                                        else if (entry.navigationLink != null) onOpenCatalog(link.href)
+                                        else onOpenWeb(link.href)
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) { Text(if (entry.navigationLink != null) "Abrir secção" else "Abrir") }
+                                Button(
+                                    onClick = {
+                                        val link = entry.openLink
+                                        if (link == null) notice = "Esta entrada não tem um link guardável."
+                                        else {
+                                            onSave(SavedManga(entry.id, entry.title, entry.summary, link.href))
+                                            notice = "${entry.title} guardado na biblioteca."
+                                        }
+                                    },
+                                    enabled = !saved && entry.openLink != null,
+                                    modifier = Modifier.weight(1f)
+                                ) { Text(if (saved) "Guardado" else "Guardar") }
+                            }
+                        }
+                    }
+                }
+                currentFeed.nextLink?.let { next ->
+                    Button(onClick = { loadCatalog(next.href) }, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
+                        Text("Próxima página")
+                    }
+                }
+                currentFeed.links.firstOrNull { it.rel == "start" || it.rel == "up" }?.let { parent ->
+                    Button(onClick = { loadCatalog(parent.href) }, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
+                        Text("Catálogo anterior")
+                    }
+                }
+                Text(
+                    "O suporte OPDS depende dos formatos e links que cada fonte disponibiliza. Só guardes ou abras conteúdos que tens autorização para consultar.",
+                    color = mutedColor,
+                    fontSize = 12.sp
+                )
+            }
+        }
     }
 }
 
