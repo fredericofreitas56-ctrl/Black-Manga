@@ -7,7 +7,7 @@ import org.xmlpull.v1.XmlPullParser
 import android.util.Xml
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.net.HttpsURLConnection
+import javax.net.ssl.HttpsURLConnection
 import java.net.URI
 import java.net.URL
 import java.net.URLEncoder
