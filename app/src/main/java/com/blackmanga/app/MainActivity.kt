@@ -111,6 +111,7 @@ private fun BlackMangaApp() {
     var selectedTab by remember { mutableStateOf(0) }
     var activeWebUrl by remember { mutableStateOf<String?>(null) }
     var activeCatalogUrl by remember { mutableStateOf<String?>(null) }
+    var activeNexusUrl by remember { mutableStateOf<String?>(null) }
     var translationInput by remember { mutableStateOf("") }
     val savedManga = remember {
         mutableStateListOf<SavedManga>().apply { addAll(BlackMangaLibrary.load(context)) }
@@ -123,12 +124,17 @@ private fun BlackMangaApp() {
         }
     }
 
+    if (activeNexusUrl != null) {
+        NexusToonsScreen(startUrl = activeNexusUrl.orEmpty(), onBack = { activeNexusUrl = null })
+        return
+    }
+
     if (activeCatalogUrl != null) {
         CatalogScreen(
             startUrl = activeCatalogUrl.orEmpty(),
             savedItems = savedManga,
             onBack = { activeCatalogUrl = null },
-            onOpenCatalog = { activeCatalogUrl = it },
+            onOpenCatalog = { if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else activeCatalogUrl = it },
             onOpenWeb = { activeWebUrl = it; activeCatalogUrl = null },
             onSave = { item ->
                 val updated = BlackMangaLibrary.add(context, item)
