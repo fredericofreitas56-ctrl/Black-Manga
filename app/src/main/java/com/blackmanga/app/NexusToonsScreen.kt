@@ -311,7 +311,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
 private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
 (function() {
   const generic = /^(ver detalhes|detalhes|ler agora|ler|abrir|ver mais|saiba mais|continuar lendo|read more|view more|view details|home|in[ií]cio|menu|pesquisar|buscar)$/i;
-  const banned = new Set(['categoria','categorias','category','categories','genero','generos','genre','genres','tag','tags','search','pesquisa','pesquisar','busca','login','logout','register','registrar','u','user','users','perfil','profile','conta','account','sobre','contato','contact','politica','termos','ranking','notificacoes','notifications','mangas','manhwas','manhuas','novels','obras','catalogo','explorar']);
+  const banned = new Set(['categoria','categorias','category','categories','genero','generos','genre','genres','tag','tags','search','pesquisa','pesquisar','busca','login','logout','register','registrar','u','user','users','perfil','profile','conta','account','sobre','contato','contact','politica','termos','ranking','notificacoes','notifications','novels','obras','catalogo','explorar']);
   const entries = [];
   const seen = new Set();
   const tidy = s => (s || '').replace(/\\s+/g, ' ').trim();
