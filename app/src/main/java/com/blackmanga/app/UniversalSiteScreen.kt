@@ -182,10 +182,34 @@ internal object UniversalSiteAdapter {
             return ""
         }
 
-        val entries = document.select("a[href]").mapNotNull { anchor ->
+        // Regras para estruturas comuns de catálogos WordPress/Madara e temas semelhantes.
+        val themeEntries = document.select(
+            ".page-item-detail, .c-tabs-item__content, .bsx, .utao, .manga-item, .manga-card, " +
+                ".series-item, .book-item, article.wp-manga, .listupd .bs, .listupd article, " +
+                ".manga-list .item, .series-list .item, .manga-listing .manga"
+        ).mapNotNull { card ->
+            val anchor = card.selectFirst(
+                ".post-title a[href], .tt a[href], .series-title a[href], .manga-name a[href], " +
+                    ".manga-title a[href], .item-thumb a[href], .thumb a[href], .bsx a[href], " +
+                    ".limit a[href], h2 a[href], h3 a[href], h4 a[href], a[href]"
+            ) ?: return@mapNotNull null
             val link = internalLink(anchor.absUrl("href")) ?: return@mapNotNull null
-            if (anchor.parents().any { it.normalName() in setOf("nav", "footer") }) return@mapNotNull null
+            val title = headingFrom(card)
+                ?: clean(anchor.attr("title")).takeIf { meaningful(it) }
+                ?: clean(anchor.selectFirst("img")?.attr("alt")).takeIf { meaningful(it) }
+                ?: clean(anchor.text()).takeIf { meaningful(it) }
+                ?: return@mapNotNull null
+            if (!meaningful(title)) return@mapNotNull null
+            val cover = imageUrl(
+                card.selectFirst(".manga-thumb img, .item-thumb img, .limit img, .thumb img, img")
+            )
+            val description = clean(card.selectFirst("p,.description,.summary,[class*=description],[class*=summary]")?.text()).take(260)
+            UniversalSiteEntry(title.take(140), link, cover, description)
+        }
 
+        fun entryFromAnchor(anchor: Element): UniversalSiteEntry? {
+            val link = internalLink(anchor.absUrl("href")) ?: return null
+            if (anchor.parents().any { it.normalName() in setOf("nav", "footer") }) return null
             var card: Element = anchor
             for (parent in anchor.parents().take(7)) {
                 val classes = (parent.className() + " " + parent.id()).lowercase()
@@ -197,21 +221,32 @@ internal object UniversalSiteAdapter {
                     if (headingFrom(parent) != null || parent.selectFirst("img") != null) break
                 }
             }
-
             val title = titleFrom(anchor).ifBlank { headingFrom(card).orEmpty() }
-            if (!meaningful(title)) return@mapNotNull null
-
+            if (!meaningful(title)) return null
             val image = imageUrl(anchor.selectFirst("img") ?: card.selectFirst("img"))
             val description = clean(
                 card.selectFirst("p,.description,.summary,[class*=description],[class*=summary]")?.text()
             ).take(260)
-            UniversalSiteEntry(title, link, image, description)
-        }.distinctBy { it.url }.take(250)
+            return UniversalSiteEntry(title.take(140), link, image, description)
+        }
+
+        val entries = (themeEntries + document.select("a[href]").mapNotNull { entryFromAnchor(it) })
+            .distinctBy { it.url }
+            .take(250)
 
         val path = finalUri.path.orEmpty().lowercase()
-        val readerLike = listOf("chapter", "capitulo", "capítulo", "reading", "reader", "read", "leitura", "episode", "episodio", "episódio", "pagina", "page")
+        val pathLooksLikeReader = listOf("chapter", "capitulo", "capítulo", "reading", "reader", "read", "leitura", "episode", "episodio", "episódio", "pagina", "page")
             .any { path.contains(it) }
 
+        // Explicit image selectors cover common manga-reader themes, even when the URL
+        // does not include words such as "chapter" or "read".
+        val themeReaderImages = document.select(
+            ".reading-content img, .page-break img, .wp-manga-chapter-img, .chapter-content img, " +
+                ".reader-area img, .chapter-images img, #readerarea img, .container-chapter-reader img, " +
+                "#chapter_imgs img, .reading-detail img, .reader img, .comic-page img, .ts-main-image"
+        ).mapNotNull { imageUrl(it) }.distinct()
+
+        val readerLike = pathLooksLikeReader || themeReaderImages.size >= 2
         val allImages = document.select("img").mapNotNull { image ->
             val url = imageUrl(image) ?: return@mapNotNull null
             val classes = (image.className() + " " + image.id()).lowercase()
@@ -221,7 +256,7 @@ internal object UniversalSiteAdapter {
             else null
         }.distinct().take(120)
 
-        val readerImages = if (readerLike) allImages
+        val readerImages = if (readerLike) (themeReaderImages + allImages).distinct().take(120)
             else if (entries.size <= 1 && allImages.size >= 4) allImages
             else emptyList()
 
