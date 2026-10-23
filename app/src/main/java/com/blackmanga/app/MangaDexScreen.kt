@@ -126,7 +126,7 @@ internal object MangaDexApi {
 }
 
 @Composable
-internal fun MangaDexScreen(startUrl: String, onBack: () -> Unit) {
+private fun MangaDexScreenLegacy(startUrl: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
     var mangas by remember { mutableStateOf<List<MdManga>>(emptyList()) }
