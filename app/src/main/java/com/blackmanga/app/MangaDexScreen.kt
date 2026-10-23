@@ -42,8 +42,8 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 
-private data class MdManga(val id: String, val title: String, val description: String, val coverUrl: String?)
-private data class MdChapter(val id: String, val name: String, val chapter: String, val language: String)
+internal data class MdManga(val id: String, val title: String, val description: String, val coverUrl: String?)
+internal data class MdChapter(val id: String, val name: String, val chapter: String, val language: String)
 
 internal object MangaDexApi {
     private const val API = "https://api.mangadex.org"
