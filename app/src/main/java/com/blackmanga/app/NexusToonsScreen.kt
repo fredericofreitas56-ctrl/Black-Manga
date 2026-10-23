@@ -218,7 +218,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 val web = view ?: return
                                 val finishedUrl = url ?: return
                                 if (!NexusToonsAdapter.supports(finishedUrl)) return
-                                web.evaluateJavascript(NEXUS_DOM_EXTRACTION_SCRIPT) { raw ->
+                                // Nexus Toons renders catalogue cards with client-side scripts. Wait briefly after page load before extracting the DOM.
+                                web.postDelayed({
+                                    if (web.url != finishedUrl) return@postDelayed
+                                    web.evaluateJavascript(NEXUS_DOM_EXTRACTION_SCRIPT) { raw ->
                                     val payload = try {
                                         JSONTokener(raw).nextValue() as? String
                                     } catch (_: Exception) {
@@ -282,7 +285,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                         data.optString("debug", "O site abriu, mas não forneceu títulos reconhecíveis.") +
                                             " Tenta usar a página inicial do Nexus Toons."
                                     } else ""
-                                }
+                                    }
+                                }, 1800)
                             }
                         }
                         loadUrl(currentUrl)
