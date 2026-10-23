@@ -141,7 +141,7 @@ internal object UniversalSiteAdapter {
             if (!hostsBelongTogether(baseHost, target.host.orEmpty())) return null
             val path = target.path.orEmpty().trimEnd('/').ifBlank { "/" }
             if (path == currentPath && target.rawQuery.isNullOrBlank()) return null
-            if (path.split('/').filter { it.isNotBlank() }.firstOrNull()?.lowercase() in excludedPaths) return null
+            if (path.split('/').filter { it.isNotBlank() }.firstOrNull()?.lowercase()?.let { it in excludedPaths } == true) return null
             return value
         }
 
@@ -483,8 +483,8 @@ private fun parseUniversalDom(raw: String, pageUrl: String): UniversalSitePage? 
 
 private const val UNIVERSAL_DOM_EXTRACTION_SCRIPT = """
 (function() {
-  const clean = v => (v || '').replace(/\\s+/g, ' ').trim();
-  const root = h => (h || '').toLowerCase().replace(/^www\\./, '').replace(/^m\\./, '');
+  const clean = v => (v || '').replace(/\s+/g, ' ').trim();
+  const root = h => (h || '').toLowerCase().replace(/^www\./, '').replace(/^m\./, '');
   const here = root(location.hostname);
   const generic = new Set(['home','homepage','menu','search','buscar','pesquisar','login','sign in','register','next','previous','back','read more','view more','view details','details','more','início','inicio','pesquisa','entrar','registar','ver mais','ver detalhes','ler agora','ler','abrir','contacto','contato','sobre']);
   const excluded = new Set(['category','categories','categoria','categorias','genre','genres','genero','generos','tag','tags','search','buscar','pesquisar','login','logout','register','signup','account','profile','user','users','contact','contato','about','privacy','terms','politica','termos']);
