@@ -200,7 +200,7 @@ private fun BlackMangaApp() {
                 Text("BM", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
             when (selectedTab) {
-                0 -> HomeScreen(onGoToSites = { selectedTab = 2 }, onGoToTranslate = { selectedTab = 3 }, onOpenMangaDex = { activeMangaDexUrl = "https://mangadex.org/" })
+                0 -> HomeScreen(onGoToSites = { selectedTab = 2 }, onGoToTranslate = { selectedTab = 3 }, onOpenMangaDex = { activeMangaDexUrl = "https://mangadex.org/" }, onOpenNexusToons = { activeNexusUrl = "https://nexustoons.com/" })
                 1 -> LibraryScreen(
                     items = savedManga,
                     onOpen = { activeUniversalUrl = it },
@@ -222,7 +222,7 @@ private fun BlackMangaApp() {
 }
 
 @Composable
-private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit, onOpenMangaDex: () -> Unit) {
+private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit, onOpenMangaDex: () -> Unit, onOpenNexusToons: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -236,6 +236,7 @@ private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit, onO
                 Text("Adiciona sites que tens autorização para usar, abre-os no leitor e traduz texto para português.", color = mutedColor)
                 Button(onClick = onGoToSites) { Text("Adicionar um site") }
                 OutlinedButton(onClick = onOpenMangaDex, modifier = Modifier.fillMaxWidth()) { Text("Explorar catálogo MangaDex") }
+                Button(onClick = onOpenNexusToons, modifier = Modifier.fillMaxWidth()) { Text("Explorar catálogo Nexus Toons") }
             }
         }
         Text("FUNÇÕES PRINCIPAIS", fontWeight = FontWeight.Bold, color = accentColor)
@@ -405,6 +406,9 @@ private fun SourcesScreen(
         )
         Button(onClick = { onOpenCatalog("https://mangadex.org/") }, modifier = Modifier.fillMaxWidth()) {
             Text("Abrir catálogo MangaDex integrado")
+        }
+        Button(onClick = { onOpenCatalog("https://nexustoons.com/") }, modifier = Modifier.fillMaxWidth()) {
+            Text("Abrir catálogo Nexus Toons integrado")
         }
         OutlinedTextField(
             value = url,
