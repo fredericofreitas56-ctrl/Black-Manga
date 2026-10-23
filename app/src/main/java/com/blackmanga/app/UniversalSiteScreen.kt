@@ -269,7 +269,7 @@ internal object UniversalSiteAdapter {
 }
 
 @Composable
-internal fun UniversalSiteScreen(startUrl: String, onBack: () -> Unit) {
+internal fun UniversalSiteScreen(startUrl: String, onBack: () -> Unit, onOpenInBrowser: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var currentUrl by remember(startUrl) { mutableStateOf(startUrl) }
     var page by remember(startUrl) { mutableStateOf<UniversalSitePage?>(null) }
@@ -422,11 +422,15 @@ internal fun UniversalSiteScreen(startUrl: String, onBack: () -> Unit) {
             }
         } else if (showBrowser) {
             Text(
-                "O navegador integrado está a tentar reconhecer a página depois de o site executar JavaScript. Podes também navegar dentro da própria página.",
+                "Não foi possível reconhecer automaticamente um catálogo nesta página. Podes continuar a navegar no site ou abri-lo sem a tentativa de extração.",
                 Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                 color = Color(0xFFB8B5C5),
                 fontSize = 11.sp
             )
+            Button(
+                onClick = { onOpenInBrowser(currentUrl) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+            ) { Text("Abrir site sem reconhecimento automático") }
             AndroidView(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 factory = { context ->
