@@ -236,7 +236,8 @@ internal object UniversalSiteAdapter {
 
         val path = finalUri.path.orEmpty().lowercase()
         val pathLooksLikeReader = listOf("chapter", "capitulo", "capítulo", "reading", "reader", "read", "leitura", "episode", "episodio", "episódio", "pagina", "page")
-            .any { path.contains(it) }
+            .any { path.contains(it) } ||
+            (baseHost.contains("vegitoons.black") && Regex("/capitulo/\\d+").containsMatchIn(finalUri.path.orEmpty()))
 
         // Explicit image selectors cover common manga-reader themes, even when the URL
         // does not include words such as "chapter" or "read".
