@@ -18,6 +18,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,9 +97,33 @@ private object MdGridApi {
                         if (file.isNotBlank()) cover = "https://uploads.mangadex.org/covers/" + item.optString("id") + "/" + file + ".256.jpg"
                     }
                 }
-                MdManga(item.optString("id"), title, desc, cover, attr.optString("status", ""), attr.optInt("year", 0).toString())
+                MdManga(item.optString("id"), title, desc, cover)
             }
         }
+    suspend fun byId(id: String): MdManga? = withContext(Dispatchers.IO) {
+        val item = json(API + "/manga/" + URLEncoder.encode(id, "UTF-8") + "?includes%5B%5D=cover_art")
+            .optJSONObject("data") ?: return@withContext null
+        val attr = item.optJSONObject("attributes") ?: JSONObject()
+        val titles = attr.optJSONObject("title") ?: JSONObject()
+        val title = sequenceOf("en", "pt-br", "ja-ro", "ja").map { titles.optString(it, "") }
+            .firstOrNull { it.isNotBlank() }
+            ?: titles.keys().asSequence().map { titles.optString(it, "") }.firstOrNull { it.isNotBlank() }
+            ?: ""
+        if (title.isBlank()) return@withContext null
+        val descObj = attr.optJSONObject("description") ?: JSONObject()
+        val desc = sequenceOf("pt-br", "en").map { descObj.optString(it, "") }.firstOrNull { it.isNotBlank() }.orEmpty()
+        var cover: String? = null
+        val rel = item.optJSONArray("relationships")
+        if (rel != null) for (j in 0 until rel.length()) {
+            val r = rel.optJSONObject(j) ?: continue
+            if (r.optString("type") == "cover_art") {
+                val file = r.optJSONObject("attributes")?.optString("fileName").orEmpty()
+                if (file.isNotBlank()) cover = "https://uploads.mangadex.org/covers/" + item.optString("id") + "/" + file + ".256.jpg"
+            }
+        }
+        MdManga(item.optString("id"), title, desc, cover)
+    }
+
 }
 
 @Composable
@@ -165,7 +190,7 @@ internal fun MangaDexScreen(startUrl: String, onBack: () -> Unit) {
             val parts = runCatching { java.net.URI(startUrl).path.orEmpty().split("/").filter { it.isNotBlank() } }.getOrDefault(emptyList())
             val id = if (parts.size >= 2 && parts[0] == "title") parts[1] else ""
             if (id.isNotBlank()) {
-                val manga = MangaDexApi.mangaById(id)
+                val manga = MdGridApi.byId(id)
                 if (manga != null) {
                     selected = manga
                     chapters = MangaDexApi.chapters(manga.id)
