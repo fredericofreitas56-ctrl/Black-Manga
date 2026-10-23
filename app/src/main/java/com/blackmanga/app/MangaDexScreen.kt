@@ -45,7 +45,7 @@ import java.net.URL
 private data class MdManga(val id: String, val title: String, val description: String, val coverUrl: String?)
 private data class MdChapter(val id: String, val name: String, val chapter: String, val language: String)
 
-private object MangaDexApi {
+internal object MangaDexApi {
     private const val API = "https://api.mangadex.org"
 
     fun supports(rawUrl: String): Boolean = try {
