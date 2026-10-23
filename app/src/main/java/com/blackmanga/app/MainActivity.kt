@@ -146,7 +146,7 @@ private fun BlackMangaApp() {
             startUrl = activeCatalogUrl.orEmpty(),
             savedItems = savedManga,
             onBack = { activeCatalogUrl = null },
-            onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else activeCatalogUrl = it },
+            onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else if (it.contains("vegitoons.black", true)) activeUniversalUrl = it else activeCatalogUrl = it },
             onOpenUniversal = { activeUniversalUrl = it; activeCatalogUrl = null },
             onOpenWeb = { activeUniversalUrl = it; activeCatalogUrl = null },
             onSave = { item ->
@@ -213,7 +213,7 @@ private fun BlackMangaApp() {
                 2 -> SourcesScreen(
                     sources = savedSources,
                     onOpenUrl = { activeUniversalUrl = it },
-                    onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else activeCatalogUrl = it }
+                    onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else if (it.contains("vegitoons.black", true)) activeUniversalUrl = it else activeCatalogUrl = it }
                 )
                 else -> TranslationScreen(initialText = translationInput)
             }
