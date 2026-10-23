@@ -70,7 +70,7 @@ private object MdGridApi {
         withContext(Dispatchers.IO) {
             val order = if (sort == "popular") "followedCount" else "latestUploadedChapter"
             val p = mutableListOf(
-                "limit=32", "offset=" + offset, "includes%5B%5D=cover_art",
+                "limit=32", "offset=" + offset, "includes%5B%5D=cover_art", "hasAvailableChapters=1",
                 "order%5B" + order + "%5D=desc", "contentRating%5B%5D=safe",
                 "contentRating%5B%5D=suggestive"
             )
@@ -184,22 +184,33 @@ internal fun MangaDexScreen(startUrl: String, onBack: () -> Unit) {
     }
 
     LaunchedEffect(startUrl) {
-        loading = true
-        try {
-            genres = MdGridApi.genres()
-            val parts = runCatching { java.net.URI(startUrl).path.orEmpty().split("/").filter { it.isNotBlank() } }.getOrDefault(emptyList())
-            val id = if (parts.size >= 2 && parts[0] == "title") parts[1] else ""
-            if (id.isNotBlank()) {
+        // A falha temporária no endpoint de géneros não deve bloquear a lista principal.
+        genres = runCatching { MdGridApi.genres() }.getOrDefault(emptyList())
+        val parts = runCatching {
+            java.net.URI(startUrl).path.orEmpty().split("/").filter { it.isNotBlank() }
+        }.getOrDefault(emptyList())
+        val id = if (parts.size >= 2 && parts[0] == "title") parts[1] else ""
+
+        if (id.isNotBlank()) {
+            var opened = false
+            loading = true
+            try {
                 val manga = MdGridApi.byId(id)
                 if (manga != null) {
                     selected = manga
                     chapters = MangaDexApi.chapters(manga.id)
                     info = "Escolhe um capítulo para ler."
-                } else load()
-            } else load()
-        } catch (e: Exception) {
-            error = e.localizedMessage ?: "Falha ao abrir MangaDex."
-        } finally { loading = false }
+                    opened = true
+                }
+            } catch (_: Exception) {
+                // Se o link direto falhar, tentamos abrir o catálogo geral em vez de deixar o ecrã vazio.
+            } finally {
+                loading = false
+            }
+            if (!opened) load()
+        } else {
+            load()
+        }
     }
 
     val quickNames = listOf("Action", "Comedy", "Drama", "Fantasy", "Romance", "Adventure", "Mystery", "Horror", "Sports")
