@@ -113,6 +113,7 @@ private fun BlackMangaApp() {
     var activeCatalogUrl by remember { mutableStateOf<String?>(null) }
     var activeNexusUrl by remember { mutableStateOf<String?>(null) }
     var activeMangaDexUrl by remember { mutableStateOf<String?>(null) }
+    var activeUniversalUrl by remember { mutableStateOf<String?>(null) }
     var translationInput by remember { mutableStateOf("") }
     val savedManga = remember {
         mutableStateListOf<SavedManga>().apply { addAll(BlackMangaLibrary.load(context)) }
@@ -135,13 +136,19 @@ private fun BlackMangaApp() {
         return
     }
 
+    if (activeUniversalUrl != null) {
+        UniversalSiteScreen(startUrl = activeUniversalUrl.orEmpty(), onBack = { activeUniversalUrl = null })
+        return
+    }
+
     if (activeCatalogUrl != null) {
         CatalogScreen(
             startUrl = activeCatalogUrl.orEmpty(),
             savedItems = savedManga,
             onBack = { activeCatalogUrl = null },
             onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else activeCatalogUrl = it },
-            onOpenWeb = { activeWebUrl = it; activeCatalogUrl = null },
+            onOpenUniversal = { activeUniversalUrl = it; activeCatalogUrl = null },
+            onOpenWeb = { activeUniversalUrl = it; activeCatalogUrl = null },
             onSave = { item ->
                 val updated = BlackMangaLibrary.add(context, item)
                 savedManga.clear()
@@ -196,7 +203,7 @@ private fun BlackMangaApp() {
                 0 -> HomeScreen(onGoToSites = { selectedTab = 2 }, onGoToTranslate = { selectedTab = 3 }, onOpenMangaDex = { activeMangaDexUrl = "https://mangadex.org/" })
                 1 -> LibraryScreen(
                     items = savedManga,
-                    onOpen = { activeWebUrl = it },
+                    onOpen = { activeUniversalUrl = it },
                     onRemove = { id ->
                         val updated = BlackMangaLibrary.remove(context, id)
                         savedManga.clear()
@@ -205,7 +212,7 @@ private fun BlackMangaApp() {
                 )
                 2 -> SourcesScreen(
                     sources = savedSources,
-                    onOpenUrl = { activeWebUrl = it },
+                    onOpenUrl = { activeUniversalUrl = it },
                     onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else activeCatalogUrl = it }
                 )
                 else -> TranslationScreen(initialText = translationInput)
@@ -233,7 +240,7 @@ private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit, onO
         }
         Text("FUNÇÕES PRINCIPAIS", fontWeight = FontWeight.Bold, color = accentColor)
         FeatureCard("Sites personalizados", "Insere uma URL HTTPS, testa se responde e guarda as tuas fontes.")
-        FeatureCard("Catálogo integrado", "Abre fontes com suporte OPDS numa lista dentro da aplicação, sem mostrar a página do site. Sites comuns precisam de um adaptador específico.")
+        FeatureCard("Catálogo automático", "Tenta reconhecer títulos e páginas nos sites que adicionares, com navegação integrada quando a estrutura permitir.")
         FeatureCard("Tradução no dispositivo", "Depois de baixar o modelo de idioma, a tradução de texto pode funcionar sem internet.")
         FeatureCard("OCR de páginas", "Seleciona uma imagem para reconhecer texto japonês ou latino e traduzir o resultado.")
         Button(onClick = onGoToTranslate, modifier = Modifier.fillMaxWidth()) { Text("Abrir tradução") }
@@ -393,7 +400,7 @@ private fun SourcesScreen(
     ) {
         Text("Fontes e sites", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Text(
-            "O MangaDex tem catálogo integrado. As fontes OPDS abrem como catálogo; o Nexus Toons usa um adaptador próprio.",
+            "O Black Manga tenta reconhecer automaticamente catálogos e páginas de mangá. Alguns sites podem exigir login ou bloquear extração.",
             color = mutedColor
         )
         Button(onClick = { onOpenCatalog("https://mangadex.org/") }, modifier = Modifier.fillMaxWidth()) {
@@ -492,6 +499,7 @@ private fun CatalogScreen(
     onBack: () -> Unit,
     onOpenCatalog: (String) -> Unit,
     onOpenWeb: (String) -> Unit,
+    onOpenUniversal: (String) -> Unit,
     onSave: (SavedManga) -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -512,9 +520,15 @@ private fun CatalogScreen(
                 val loaded = withContext(Dispatchers.IO) { OpdsCatalogClient.load(url) }
                 if (pushHistory && currentUrl != url) history = history + currentUrl
                 currentUrl = url
-                feed = loaded
+                if (loaded.entries.isEmpty()) {
+                    // Um HTML comum pode ser aceite como uma resposta, mas não é um catálogo OPDS.
+                    onOpenUniversal(url)
+                } else {
+                    feed = loaded
+                }
             } catch (e: Exception) {
-                error = e.localizedMessage ?: "Não foi possível ler este catálogo."
+                // Se não for OPDS, abrir automaticamente o navegador/catálogo universal.
+                onOpenUniversal(url)
             } finally {
                 loading = false
             }
@@ -537,7 +551,7 @@ private fun CatalogScreen(
                 } else onBack()
             }) { Text("Voltar") }
             Column(modifier = Modifier.weight(1f)) {
-                Text("Catálogo OPDS", fontWeight = FontWeight.Bold)
+                Text("Catálogo automático", fontWeight = FontWeight.Bold)
                 Text(currentUrl, color = mutedColor, fontSize = 10.sp, maxLines = 1)
             }
         }
