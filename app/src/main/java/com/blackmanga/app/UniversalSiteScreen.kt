@@ -576,13 +576,33 @@ private const val UNIVERSAL_DOM_EXTRACTION_SCRIPT = """
     add(a, title);
   }
   const path = location.pathname.toLowerCase();
-  const readerLike = /(chapter|capitulo|capítulo|reading|reader|read|leitura|episode|episodio|episódio|pagina|page)/.test(path);
-  const readerImages = [];
+  const readerSelectors = [
+    '.reading-content img', '.page-break img', '.wp-manga-chapter-img',
+    '.chapter-content img', '.reader-area img', '.chapter-images img',
+    '#readerarea img', '.container-chapter-reader img', '#chapter_imgs img',
+    '.reading-detail img', '.reader img', '.comic-page img', '.ts-main-image',
+    '.wp-manga-reader img', '#manga-reading .page-break img'
+  ];
+  const explicitReaderImages = [];
+  for (const selector of readerSelectors) {
+    try {
+      for (const img of Array.from(document.querySelectorAll(selector))) {
+        const url = img.currentSrc || img.getAttribute('data-src') ||
+          img.getAttribute('data-lazy-src') || img.getAttribute('data-original') || img.src || '';
+        if (url.startsWith('https://') && !/(logo|avatar|icon|emoji|banner-ad)/i.test(url)) {
+          if (!explicitReaderImages.includes(url)) explicitReaderImages.push(url);
+        }
+      }
+    } catch(e) {}
+  }
+  const readerLike = /(chapter|capitulo|capítulo|reading|reader|read|leitura|episode|episodio|episódio|pagina|page)/.test(path)
+    || explicitReaderImages.length >= 2;
+  const readerImages = explicitReaderImages.slice(0,120);
   if (readerLike) {
     for (const img of Array.from(document.querySelectorAll('img'))) {
       const cls = ((img.className || '') + ' ' + (img.id || '')).toLowerCase();
       const width = Number(img.getAttribute('width') || img.naturalWidth || 0);
-      const url = img.currentSrc || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.src || '';
+      const url = img.currentSrc || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('data-original') || img.src || '';
       if (url.startsWith('https://') && (width >= 180 || /(page|chapter|reading|reader|manga|scan)/.test(cls)) && !/(logo|avatar|icon|emoji|banner-ad)/i.test(url)) {
         if (!readerImages.includes(url)) readerImages.push(url);
       }
