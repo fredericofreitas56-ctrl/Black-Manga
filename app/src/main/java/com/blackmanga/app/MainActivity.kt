@@ -193,7 +193,7 @@ private fun BlackMangaApp() {
                 Text("BM", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
             when (selectedTab) {
-                0 -> HomeScreen(onGoToSites = { selectedTab = 2 }, onGoToTranslate = { selectedTab = 3 })
+                0 -> HomeScreen(onGoToSites = { selectedTab = 2 }, onGoToTranslate = { selectedTab = 3 }, onOpenMangaDex = { activeMangaDexUrl = "https://mangadex.org/" })
                 1 -> LibraryScreen(
                     items = savedManga,
                     onOpen = { activeWebUrl = it },
@@ -206,7 +206,7 @@ private fun BlackMangaApp() {
                 2 -> SourcesScreen(
                     sources = savedSources,
                     onOpenUrl = { activeWebUrl = it },
-                    onOpenCatalog = { if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else activeCatalogUrl = it }
+                    onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else activeCatalogUrl = it }
                 )
                 else -> TranslationScreen(initialText = translationInput)
             }
@@ -215,7 +215,7 @@ private fun BlackMangaApp() {
 }
 
 @Composable
-private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit) {
+private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit, onOpenMangaDex: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -228,6 +228,7 @@ private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit) {
                 Text("O teu próximo capítulo começa aqui.", fontSize = 25.sp, fontWeight = FontWeight.Bold)
                 Text("Adiciona sites que tens autorização para usar, abre-os no leitor e traduz texto para português.", color = mutedColor)
                 Button(onClick = onGoToSites) { Text("Adicionar um site") }
+                OutlinedButton(onClick = onOpenMangaDex, modifier = Modifier.fillMaxWidth()) { Text("Explorar catálogo MangaDex") }
             }
         }
         Text("FUNÇÕES PRINCIPAIS", fontWeight = FontWeight.Bold, color = accentColor)
@@ -392,9 +393,12 @@ private fun SourcesScreen(
     ) {
         Text("Fontes e sites", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         Text(
-            "Fontes OPDS abrem como catálogo. O Nexus Toons usa o adaptador próprio para tentar encontrar mangas e capítulos.",
+            "O MangaDex tem catálogo integrado. As fontes OPDS abrem como catálogo; o Nexus Toons usa um adaptador próprio.",
             color = mutedColor
         )
+        Button(onClick = { onOpenCatalog("https://mangadex.org/") }, modifier = Modifier.fillMaxWidth()) {
+            Text("Abrir catálogo MangaDex integrado")
+        }
         OutlinedTextField(
             value = url,
             onValueChange = { url = it; checkResult = null },
