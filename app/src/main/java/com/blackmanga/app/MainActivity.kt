@@ -137,7 +137,11 @@ private fun BlackMangaApp() {
     }
 
     if (activeUniversalUrl != null) {
-        UniversalSiteScreen(startUrl = activeUniversalUrl.orEmpty(), onBack = { activeUniversalUrl = null })
+        UniversalSiteScreen(
+            startUrl = activeUniversalUrl.orEmpty(),
+            onBack = { activeUniversalUrl = null },
+            onOpenInBrowser = { url -> activeUniversalUrl = null; activeWebUrl = url }
+        )
         return
     }
 
@@ -148,7 +152,7 @@ private fun BlackMangaApp() {
             onBack = { activeCatalogUrl = null },
             onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else if (it.contains("vegitoons.black", true)) activeUniversalUrl = it else activeCatalogUrl = it },
             onOpenUniversal = { activeUniversalUrl = it; activeCatalogUrl = null },
-            onOpenWeb = { activeUniversalUrl = it; activeCatalogUrl = null },
+            onOpenWeb = { activeCatalogUrl = null; activeWebUrl = it },
             onSave = { item ->
                 val updated = BlackMangaLibrary.add(context, item)
                 savedManga.clear()
@@ -212,7 +216,7 @@ private fun BlackMangaApp() {
                 )
                 2 -> SourcesScreen(
                     sources = savedSources,
-                    onOpenUrl = { activeUniversalUrl = it },
+                    onOpenUrl = { activeWebUrl = it },
                     onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else if (it.contains("vegitoons.black", true)) activeUniversalUrl = it else activeCatalogUrl = it }
                 )
                 else -> TranslationScreen(initialText = translationInput)
@@ -429,6 +433,11 @@ private fun SourcesScreen(
                 enabled = url.trim().startsWith("https://", ignoreCase = true),
                 modifier = Modifier.weight(1f)
             ) { Text("Explorar fonte integrada") }
+            OutlinedButton(
+                onClick = { onOpenUrl(url.trim()) },
+                enabled = UniversalSiteAdapter.isSafeHttpsUrl(url),
+                modifier = Modifier.weight(1f)
+            ) { Text("Ver site") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
@@ -680,7 +689,7 @@ private fun WebReaderScreen(url: String, onBack: () -> Unit, onExtractText: (Str
         ) {
             Button(onClick = onBack) { Text("Voltar") }
             Column(modifier = Modifier.weight(1f)) {
-                Text("Leitor web", fontWeight = FontWeight.Bold)
+                Text("Navegador do site", fontWeight = FontWeight.Bold)
                 Text(url, fontSize = 10.sp, color = mutedColor, maxLines = 1)
             }
         }
