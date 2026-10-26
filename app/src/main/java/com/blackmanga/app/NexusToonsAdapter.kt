@@ -35,13 +35,27 @@ internal object NexusToonsAdapter {
         "busca", "login", "logout", "register", "registrar", "u", "user", "users",
         "perfil", "profile", "conta", "account", "sobre", "contato", "contact",
         "politica", "termos", "ranking", "notificacoes", "notifications",
-        "novels", "obras", "catalogo", "explorar"
+        "novels", "obras", "catalogo", "explorar", "loja", "biblioteca",
+        "niveis", "níveis", "conquistas", "comunidade", "comunidades", "cart"
+    )
+
+    private val catalogueRoutes = setOf(
+        "/", "/biblioteca", "/loja", "/catalogo", "/explorar", "/niveis",
+        "/níveis", "/conquistas", "/comunidade", "/comunidades"
     )
 
     fun supports(rawUrl: String): Boolean = try {
         URI(rawUrl.trim()).host?.lowercase()?.let { it == HOST || it.endsWith(".$HOST") } == true
     } catch (_: Exception) {
         false
+    }
+
+    fun normalizeCatalogueStart(rawUrl: String): String = try {
+        val uri = URI(rawUrl.trim())
+        val route = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }.lowercase()
+        if (supports(rawUrl) && route in catalogueRoutes) "https://nexustoons.com/" else rawUrl
+    } catch (_: Exception) {
+        rawUrl
     }
 
     suspend fun load(rawUrl: String): NexusPage = withContext(Dispatchers.IO) {
@@ -87,8 +101,18 @@ internal object NexusToonsAdapter {
 
             val segments = target.path.orEmpty().split('/').filter { it.isNotBlank() }
             if (segments.isEmpty()) return false
-            if (segments.first().lowercase() in excludedFirstPathSegments) return false
-            if (segments.size == 1 && segments.first().lowercase() in setOf(
+            val first = segments.first().lowercase()
+            if (first in excludedFirstPathSegments) return false
+
+            val sourcePath = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }.lowercase()
+            val isCataloguePage = sourcePath in catalogueRoutes
+            // On the catalogue/home page, only manga detail URLs are works. This prevents
+            // menu items such as "Biblioteca", "Loja" and "Conquistas" becoming fake titles.
+            if (isCataloguePage && first != "manga") return false
+            // On a manga detail page, related manga links are not chapters.
+            if (sourcePath.startsWith("/manga/") && first == "manga") return false
+
+            if (segments.size == 1 && first in setOf(
                     "manga", "manhwa", "manhua", "novel", "comic", "obra", "capitulo"
                 )) return false
             if (isGeneric(label)) return false
@@ -123,6 +147,12 @@ internal object NexusToonsAdapter {
                 val target = try { URI(link) } catch (_: Exception) { return@mapNotNull null }
                 val resolvedPath = target.path.orEmpty().trimEnd('/').ifBlank { "/" }
                 if (resolvedPath == currentNoQuery && target.rawQuery.isNullOrBlank()) return@mapNotNull null
+
+                // Navigation/header links must never be exposed as catalogue works.
+                if (anchor.parents().any { parent ->
+                        parent.normalName() in setOf("nav", "header", "footer") ||
+                            parent.attr("role").equals("navigation", true)
+                    }) return@mapNotNull null
 
                 val title = titleForAnchor(anchor)
                 if (!isContentLink(link, title)) return@mapNotNull null
