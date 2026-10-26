@@ -868,11 +868,11 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
 
 private const val NEXUS_PREPARE_LAZY_IMAGES_SCRIPT = """
 (function() {
-  const bad = /(logo|avatar|favicon|emoji|sprite|mascot|placeholder|profile|banner-ad|blank\\.(gif|png|jpg)|transparent\\.(gif|png))/i;
+  const bad = /(logo|avatar|favicon|emoji|sprite|mascot|placeholder|profile|banner-ad|blank\.(gif|png|jpg)|transparent\.(gif|png))/i;
   const attrs = ['data-src','data-lazy-src','data-original','data-lazyload','data-image','data-cfsrc','data-echo','data-url','data-image-src','data-original-src','data-lazy','data-flickity-lazyload'];
   const resolve = raw => {
     if (!raw) return '';
-    const part = String(raw).split(',')[0].trim().split(/\\s+/)[0];
+    const part = String(raw).split(',')[0].trim().split(/\s+/)[0];
     if (!part || part.startsWith('data:image') || /^(about:blank|javascript:|#)$/i.test(part)) return '';
     try {
       const url = new URL(part, location.href);
@@ -1001,7 +1001,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
         try {
           const url = new URL(part, location.href);
           if (url.protocol !== 'https:') continue;
-          if (/(logo|avatar|favicon|emoji|sprite|mascot|placeholder|profile|banner-ad|blank\\.(gif|png|jpg)|transparent\\.(gif|png))/i.test(url.href)) continue;
+          if (/(logo|avatar|favicon|emoji|sprite|mascot|placeholder|profile|banner-ad|blank\.(gif|png|jpg)|transparent\.(gif|png))/i.test(url.href)) continue;
           candidates.push({url:url.href, score:score, label:label || ''});
         } catch(e) {}
       }
