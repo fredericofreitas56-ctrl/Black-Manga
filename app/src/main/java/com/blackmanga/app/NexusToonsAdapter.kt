@@ -204,11 +204,11 @@ internal object NexusToonsAdapter {
                 val classes = (parent.className() + " " + parent.id()).lowercase()
                 val looksLikeCard = listOf("manga", "comic", "manhwa", "manhua", "book", "series", "swiper-slide", "post-item", "cover", "thumbnail", "entry-card")
                     .any { classes.contains(it) } || parent.normalName() == "article" || parent.normalName() == "li"
-                val workLinks = parent.select("a[href*=/manga/]").size
+                val workLinks = parent.select("a[href*='/manga/']").size
                 val imageCount = parent.select("img").size
                 looksLikeCard && workLinks in 1..3 && imageCount in 1..6
             } ?: anchor.parents().take(6).firstOrNull { parent ->
-                parent.select("a[href*=/manga/]").size == 1 && parent.select("img").isNotEmpty() &&
+                parent.select("a[href*='/manga/']").size == 1 && parent.select("img").isNotEmpty() &&
                     meaningfulHeading(parent) != null
             }
         }
@@ -265,7 +265,7 @@ internal object NexusToonsAdapter {
         val currentNoQuery = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }
         val sourcePath = currentNoQuery.lowercase()
         val isCataloguePage = sourcePath in catalogueRoutes
-        val workEntries = document.select("a[href*=/manga/]")
+        val workEntries = document.select("a[href*='/manga/']")
             .mapNotNull { anchor ->
                 val link = anchor.absUrl("href").substringBefore("#").trim()
                 if (link.isBlank()) return@mapNotNull null
@@ -344,7 +344,7 @@ internal object NexusToonsAdapter {
             .distinctBy { it.url }
             .take(30)
 
-        val nextPageUrl = document.select("a[rel=next],.pagination a.next,.nav-links a.next,a.page-numbers.next,a[aria-label*=Next],a[aria-label*=Próxima],a.load-more,.load-more a")
+        val nextPageUrl = document.select("a[rel=next],.pagination a.next,.nav-links a.next,a.page-numbers.next,a.load-more,.load-more a")
             .mapNotNull { it.absUrl("href").takeIf { link -> supports(link) && link.startsWith("https://") } }
             .firstOrNull()
 
@@ -354,7 +354,7 @@ internal object NexusToonsAdapter {
         )?.let { cleaned(it.text()) }.orEmpty()
         val coverUrl = document.selectFirst("meta[property=og:image]")?.attr("content")
             ?.takeIf { it.startsWith("https://") }
-            ?: imageFromCard(document.selectFirst("a[href*=/manga/]") ?: document.body(), document.body())
+            ?: imageFromCard(document.selectFirst("a[href*='/manga/']") ?: document.body(), document.body())
         val author = document.select("li,div,p,span").firstOrNull { cleaned(it.text()).startsWith("Autor", true) }
             ?.let { cleaned(it.text()).removePrefix("Autor").removePrefix(":").trim() }.orEmpty()
         val status = Regex("\\b(Em andamento|Hiato|Concluído|Concluido|Completo)\\b", RegexOption.IGNORE_CASE)
