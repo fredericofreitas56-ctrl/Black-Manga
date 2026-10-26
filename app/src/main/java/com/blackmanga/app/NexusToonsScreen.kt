@@ -773,9 +773,11 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 previewCovers < (previewEntries.size * 0.65).toInt()
                                             val hasNoUsefulData = extractedEntries.isEmpty() &&
                                                 extractedChapters.isEmpty() && extractedImages.isEmpty()
-                                            if ((hasNoUsefulData || needsMoreCovers) && extractionAttempts < 8) {
+                                            if ((hasNoUsefulData || needsMoreCovers) && extractionAttempts < 20) {
+                                                // A grelha usa lazy-loading: continuar a percorrer a página em vez
+                                                // de voltar sempre ao topo após cada tentativa.
                                                 web.evaluateJavascript(NEXUS_PREPARE_LAZY_IMAGES_SCRIPT, null)
-                                                web.postDelayed({ extractDomWhenReady() }, 1100L)
+                                                web.postDelayed({ extractDomWhenReady() }, 1000L)
                                                 return@evaluateJavascript
                                             }
 
@@ -838,7 +840,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 "reader" -> combinedImages.isEmpty()
                                                 "detail" -> combinedChapters.isEmpty()
                                                 else -> combinedEntries.isEmpty() ||
-                                                    (finalCoverCoveragePoor && extractionAttempts < 8)
+                                                    (finalCoverCoveragePoor && extractionAttempts < 20)
                                             }
                                             domFallbackMessage = if (needsDomFallback) {
                                                 data.optString("debug", "Não foram encontrados elementos suficientes.")
@@ -904,10 +906,12 @@ private const val NEXUS_PREPARE_LAZY_IMAGES_SCRIPT = """
     }
   }
   const maxY = Math.max(document.body ? document.body.scrollHeight : 0, document.documentElement.scrollHeight);
-  const nextY = Math.min(maxY, (window.scrollY || 0) + Math.max(window.innerHeight || 600, 600));
+  const currentY = window.scrollY || 0;
+  const nextY = Math.min(maxY, currentY + Math.max(window.innerHeight || 600, 600));
+  // Não regressar ao topo: isso voltava a acionar sempre só as imagens visíveis
+  // no início da grelha e deixava quase todas as capas por extrair.
   window.scrollTo(0, nextY);
-  setTimeout(() => window.scrollTo(0, 0), 300);
-  return JSON.stringify({images: imgs.length, changed: changed, scrollHeight: maxY});
+  return JSON.stringify({images: imgs.length, changed: changed, scrollY: nextY, scrollHeight: maxY});
 })();
 """;
 
