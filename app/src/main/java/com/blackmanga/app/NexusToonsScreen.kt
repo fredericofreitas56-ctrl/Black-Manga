@@ -677,6 +677,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     val finishedUrl = url ?: return
                                     if (!NexusToonsAdapter.supports(finishedUrl)) return
                                     var extractionAttempts = 0
+                                    val accumulatedDomEntries = linkedMapOf<String, NexusEntry>()
                                     fun extractDomWhenReady() {
                                         if (web.url != finishedUrl) return
                                         extractionAttempts += 1
@@ -735,16 +736,53 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 imageArray.optString(index).takeIf { it.startsWith("https://") && !it.contains("data:image", true) }
                                             }.distinct().take(150)
 
-                                            if (extractedEntries.isEmpty() && extractedChapters.isEmpty() &&
-                                                extractedImages.isEmpty() && extractionAttempts < 6) {
-                                                web.postDelayed({ extractDomWhenReady() }, 1200L)
+                                            // Guardar os resultados de cada tentativa: as imagens lazy-loaded podem
+                                            // aparecer em momentos diferentes, depois de forçar o carregamento/scroll.
+                                            extractedEntries.forEach { fresh ->
+                                                val old = accumulatedDomEntries[fresh.url]
+                                                accumulatedDomEntries[fresh.url] = if (old == null) fresh else old.copy(
+                                                    imageUrl = fresh.imageUrl?.takeIf { it.isNotBlank() } ?: old.imageUrl,
+                                                    title = old.title.ifBlank { fresh.title },
+                                                    description = old.description.ifBlank { fresh.description },
+                                                    kind = old.kind.ifBlank { fresh.kind },
+                                                    status = old.status.ifBlank { fresh.status },
+                                                    rating = old.rating.ifBlank { fresh.rating },
+                                                    chapterCount = old.chapterCount.ifBlank { fresh.chapterCount },
+                                                    genres = (old.genres + fresh.genres).distinct()
+                                                )
+                                            }
+                                            val domEntries = accumulatedDomEntries.values.toList()
+                                            val previewByUrl = linkedMapOf<String, NexusEntry>()
+                                            page?.entries.orEmpty().forEach { previewByUrl[it.url] = it }
+                                            domEntries.forEach { fresh ->
+                                                val old = previewByUrl[fresh.url]
+                                                previewByUrl[fresh.url] = if (old == null) fresh else old.copy(
+                                                    imageUrl = fresh.imageUrl?.takeIf { it.isNotBlank() } ?: old.imageUrl,
+                                                    description = old.description.ifBlank { fresh.description },
+                                                    kind = old.kind.ifBlank { fresh.kind },
+                                                    status = old.status.ifBlank { fresh.status },
+                                                    rating = old.rating.ifBlank { fresh.rating },
+                                                    chapterCount = old.chapterCount.ifBlank { fresh.chapterCount },
+                                                    genres = (old.genres + fresh.genres).distinct()
+                                                )
+                                            }
+                                            val previewEntries = previewByUrl.values.toList()
+                                            val previewCovers = previewEntries.count { !it.imageUrl.isNullOrBlank() }
+                                            val needsMoreCovers = viewMode == "catalog" &&
+                                                previewEntries.size >= 8 &&
+                                                previewCovers < (previewEntries.size * 0.65).toInt()
+                                            val hasNoUsefulData = extractedEntries.isEmpty() &&
+                                                extractedChapters.isEmpty() && extractedImages.isEmpty()
+                                            if ((hasNoUsefulData || needsMoreCovers) && extractionAttempts < 8) {
+                                                web.evaluateJavascript(NEXUS_PREPARE_LAZY_IMAGES_SCRIPT, null)
+                                                web.postDelayed({ extractDomWhenReady() }, 1100L)
                                                 return@evaluateJavascript
                                             }
 
                                             val oldPage = page
                                             val mergedEntryMap = linkedMapOf<String, NexusEntry>()
                                             oldPage?.entries.orEmpty().forEach { mergedEntryMap[it.url] = it }
-                                            extractedEntries.forEach { fresh ->
+                                            domEntries.forEach { fresh ->
                                                 val old = mergedEntryMap[fresh.url]
                                                 mergedEntryMap[fresh.url] = when {
                                                     old == null -> fresh
@@ -752,6 +790,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                         fresh.copy(title = old.title.ifBlank { fresh.title },
                                                             description = fresh.description.ifBlank { old.description })
                                                     else -> old.copy(
+                                                        imageUrl = old.imageUrl?.takeIf { it.isNotBlank() } ?: fresh.imageUrl,
                                                         description = old.description.ifBlank { fresh.description },
                                                         kind = old.kind.ifBlank { fresh.kind },
                                                         status = old.status.ifBlank { fresh.status },
@@ -792,10 +831,14 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             }
                                             error = ""
                                             domFallbackLoading = false
+                                            val finalCoverCount = combinedEntries.count { !it.imageUrl.isNullOrBlank() }
+                                            val finalCoverCoveragePoor = combinedEntries.size >= 8 &&
+                                                finalCoverCount < (combinedEntries.size * 0.65).toInt()
                                             needsDomFallback = when (viewMode) {
                                                 "reader" -> combinedImages.isEmpty()
                                                 "detail" -> combinedChapters.isEmpty()
-                                                else -> combinedEntries.isEmpty()
+                                                else -> combinedEntries.isEmpty() ||
+                                                    (finalCoverCoveragePoor && extractionAttempts < 8)
                                             }
                                             domFallbackMessage = if (needsDomFallback) {
                                                 data.optString("debug", "Não foram encontrados elementos suficientes.")
@@ -822,6 +865,51 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     }
 }
 
+
+private const val NEXUS_PREPARE_LAZY_IMAGES_SCRIPT = """
+(function() {
+  const bad = /(logo|avatar|favicon|emoji|sprite|mascot|placeholder|profile|banner-ad|blank\\.(gif|png|jpg)|transparent\\.(gif|png))/i;
+  const attrs = ['data-src','data-lazy-src','data-original','data-lazyload','data-image','data-cfsrc','data-echo','data-url','data-image-src','data-original-src','data-lazy','data-flickity-lazyload'];
+  const resolve = raw => {
+    if (!raw) return '';
+    const part = String(raw).split(',')[0].trim().split(/\\s+/)[0];
+    if (!part || part.startsWith('data:image') || /^(about:blank|javascript:|#)$/i.test(part)) return '';
+    try {
+      const url = new URL(part, location.href);
+      return url.protocol === 'https:' && !bad.test(url.href) ? url.href : '';
+    } catch(e) { return ''; }
+  };
+  let changed = 0;
+  const imgs = Array.from(document.querySelectorAll('img'));
+  for (const img of imgs) {
+    img.loading = 'eager';
+    const current = img.getAttribute('src') || '';
+    const currentBad = !current || current.startsWith('data:image') || bad.test(current);
+    let real = '';
+    for (const attr of attrs) {
+      real = resolve(img.getAttribute(attr));
+      if (real) break;
+    }
+    if (real && currentBad) {
+      img.setAttribute('src', real);
+      changed++;
+    }
+    const lazySet = img.getAttribute('data-srcset') || img.getAttribute('data-lazy-srcset');
+    if (lazySet) {
+      img.setAttribute('srcset', lazySet);
+      if (!real && currentBad) {
+        const first = resolve(lazySet);
+        if (first) { img.setAttribute('src', first); changed++; }
+      }
+    }
+  }
+  const maxY = Math.max(document.body ? document.body.scrollHeight : 0, document.documentElement.scrollHeight);
+  const nextY = Math.min(maxY, (window.scrollY || 0) + Math.max(window.innerHeight || 600, 600));
+  window.scrollTo(0, nextY);
+  setTimeout(() => window.scrollTo(0, 0), 300);
+  return JSON.stringify({images: imgs.length, changed: changed, scrollHeight: maxY});
+})();
+""";
 
 private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
 (function() {
