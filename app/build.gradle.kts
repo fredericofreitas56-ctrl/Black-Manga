@@ -14,8 +14,8 @@ android {
         applicationId = "com.blackmanga.app"
         minSdk = 23
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.5.5"
+        versionCode = 14
+        versionName = "0.5.6"
     }
 
     buildFeatures {
