@@ -36,7 +36,8 @@ internal object NexusToonsAdapter {
         "perfil", "profile", "conta", "account", "sobre", "contato", "contact",
         "politica", "termos", "ranking", "notificacoes", "notifications",
         "novels", "obras", "catalogo", "explorar", "loja", "biblioteca",
-        "niveis", "níveis", "conquistas", "comunidade", "comunidades", "cart"
+        "niveis", "níveis", "conquistas", "comunidade", "comunidades", "cart",
+        "app", "download", "downloads", "sobre", "ajuda", "faq", "conta", "perfil"
     )
 
     private val catalogueRoutes = setOf(
@@ -106,9 +107,12 @@ internal object NexusToonsAdapter {
 
             val sourcePath = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }.lowercase()
             val isCataloguePage = sourcePath in catalogueRoutes
-            // On the catalogue/home page, only manga detail URLs are works. This prevents
-            // menu items such as "Biblioteca", "Loja" and "Conquistas" becoming fake titles.
-            if (isCataloguePage && first != "manga") return false
+            // The site's work URLs are not guaranteed to use /manga/. Keep all same-site
+            // work routes on catalogue pages, while excluding menus and chapter links.
+            if (isCataloguePage && Regex(
+                    "^(cap\\.?|cap[ií]tulo|chapter|ep[ií]s[oó]dio|episode|p[aá]gina)\\s*\\d+",
+                    RegexOption.IGNORE_CASE
+                ).containsMatchIn(label.trim())) return false
             // On a manga detail page, exclude other work pages but allow nested chapter routes.
             if (sourcePath.startsWith("/manga/") && first == "manga" && segments.size <= 2) return false
 
