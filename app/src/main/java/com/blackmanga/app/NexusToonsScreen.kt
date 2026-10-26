@@ -118,7 +118,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             selectedChapterUrl = null
             selectedChapterTitle = ""
             readerImages = emptyList()
-            readerTitle = ""
+            if (targetMode != "reader") readerTitle = ""
             needsDomFallback = false
             domFallbackLoading = false
             domFallbackMessage = ""
@@ -179,13 +179,18 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 page = result
                 if (result.readerImages.isNotEmpty()) {
                     readerImages = result.readerImages
-                    readerTitle = result.title
+                    if (readerTitle.isBlank()) readerTitle = result.title
                 }
 
+                val coverUrls = result.entries.mapNotNull { it.imageUrl?.takeIf(String::isNotBlank) }
+                val coverCounts = coverUrls.groupingBy { it }.eachCount()
+                val repeatedCovers = coverCounts.values.any { it >= 3 }
+                val poorCoverCoverage = result.entries.size >= 8 &&
+                    (coverUrls.size < result.entries.size * 0.65 || repeatedCovers)
                 val needsExtraction = when (targetMode) {
                     "reader" -> result.readerImages.isEmpty()
                     "detail" -> result.chapters.isEmpty()
-                    else -> result.entries.size < 8
+                    else -> result.entries.size < 8 || poorCoverCoverage
                 }
                 if (needsExtraction) {
                     needsDomFallback = true
@@ -679,8 +684,26 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             }
 
                                             val oldPage = page
-                                            val combinedEntries = (oldPage?.entries.orEmpty() + extractedEntries)
-                                                .distinctBy { it.url }.take(500)
+                                            val mergedEntryMap = linkedMapOf<String, NexusEntry>()
+                                            oldPage?.entries.orEmpty().forEach { mergedEntryMap[it.url] = it }
+                                            extractedEntries.forEach { fresh ->
+                                                val old = mergedEntryMap[fresh.url]
+                                                mergedEntryMap[fresh.url] = when {
+                                                    old == null -> fresh
+                                                    !fresh.imageUrl.isNullOrBlank() && fresh.imageUrl != old.imageUrl ->
+                                                        fresh.copy(title = old.title.ifBlank { fresh.title },
+                                                            description = fresh.description.ifBlank { old.description })
+                                                    else -> old.copy(
+                                                        description = old.description.ifBlank { fresh.description },
+                                                        kind = old.kind.ifBlank { fresh.kind },
+                                                        status = old.status.ifBlank { fresh.status },
+                                                        rating = old.rating.ifBlank { fresh.rating },
+                                                        chapterCount = old.chapterCount.ifBlank { fresh.chapterCount },
+                                                        genres = (old.genres + fresh.genres).distinct()
+                                                    )
+                                                }
+                                            }
+                                            val combinedEntries = mergedEntryMap.values.toList().take(500)
                                             val combinedChapters = (oldPage?.chapters.orEmpty() + extractedChapters)
                                                 .distinctBy { it.url }.take(600)
                                             val combinedImages = (extractedImages + oldPage?.readerImages.orEmpty()).distinct().take(150)
@@ -704,7 +727,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             )
                                             if (combinedImages.isNotEmpty()) {
                                                 readerImages = combinedImages
-                                                readerTitle = data.optString("title", oldPage?.title ?: "Capítulo").ifBlank { "Capítulo" }
+                                                if (readerTitle.isBlank()) {
+                                                    readerTitle = data.optString("title", oldPage?.title ?: "Capítulo").ifBlank { "Capítulo" }
+                                                }
                                                 viewMode = "reader"
                                             }
                                             error = ""
