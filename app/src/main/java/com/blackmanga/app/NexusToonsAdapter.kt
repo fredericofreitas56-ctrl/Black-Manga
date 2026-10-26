@@ -150,9 +150,13 @@ internal object NexusToonsAdapter {
             if (listOf("avatar", "profile", "user-icon", "emoji", "favicon", "sprite", "mascot", "placeholder")
                     .any { classes.contains(it) }) return null
             val candidate = sequenceOf("data-src", "data-lazy-src", "data-original", "data-lazyload", "data-url", "src", "srcset", "data-srcset", "data-lazy-srcset")
-                .map { attr -> 
+                .map { attr ->
                     val raw = img.attr(attr).substringBefore(",").trim().split(Regex("\\s+")).firstOrNull().orEmpty()
-                    if (raw.isBlank()) "" else try { URI(raw).let { if (it.isAbsolute) raw else img.absUrl(attr) } } catch (_: Exception) { img.absUrl(attr) }
+                    if (raw.isBlank()) "" else try {
+                        URI(img.baseUri()).resolve(URI(raw)).toString()
+                    } catch (_: Exception) {
+                        img.absUrl("src")
+                    }
                 }
                 .firstOrNull { it.startsWith("https://") && !it.contains("data:image", true) }
             return candidate?.takeIf {
