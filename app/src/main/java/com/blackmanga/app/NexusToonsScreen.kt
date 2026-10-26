@@ -9,6 +9,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,24 +18,31 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,36 +64,68 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val paper = Color(0xFFFFF8F5)
+    val ink = Color(0xFF292321)
+    val muted = Color(0xFF8A7268)
+    val accent = Color(0xFF8B4E32)
+    val paleCard = Color(0xFFFFEEE6)
+
     var currentUrl by remember(startUrl) { mutableStateOf(NexusToonsAdapter.normalizeCatalogueStart(startUrl)) }
     var history by remember(startUrl) { mutableStateOf(emptyList<String>()) }
     var page by remember { mutableStateOf<NexusPage?>(null) }
+    var viewMode by remember(startUrl) {
+        mutableStateOf(
+            when {
+                NexusToonsAdapter.isReaderUrl(startUrl) -> "reader"
+                NexusToonsAdapter.isCatalogueUrl(startUrl) -> "catalog"
+                else -> "detail"
+            }
+        )
+    }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("") }
+    var typeFilter by remember { mutableStateOf("Todos") }
+    var selectedWork by remember { mutableStateOf<NexusEntry?>(null) }
+    var selectedChapterUrl by remember { mutableStateOf<String?>(null) }
+    var selectedChapterTitle by remember { mutableStateOf("") }
+    var favourite by remember { mutableStateOf(false) }
     var readerImages by remember { mutableStateOf<List<String>>(emptyList()) }
     var readerTitle by remember { mutableStateOf("") }
     var needsDomFallback by remember { mutableStateOf(false) }
     var domFallbackLoading by remember { mutableStateOf(false) }
     var domFallbackMessage by remember { mutableStateOf("") }
 
-    fun load(url: String, saveHistory: Boolean = true) {
+    fun load(url: String, saveHistory: Boolean = true, appendEntries: Boolean = false, forcedMode: String? = null) {
         val destination = NexusToonsAdapter.normalizeCatalogueStart(url)
         if (!NexusToonsAdapter.supports(destination)) {
             error = "Este endereço não pertence ao Nexus Toons."
             return
         }
+        val targetMode = forcedMode ?: when {
+            NexusToonsAdapter.isReaderUrl(destination) -> "reader"
+            NexusToonsAdapter.isCatalogueUrl(destination) -> "catalog"
+            else -> "detail"
+        }
+        val previousPage = if (appendEntries) page else null
         if (saveHistory && currentUrl != destination) history = history + currentUrl
         scope.launch {
             loading = true
             error = ""
             filter = ""
+            typeFilter = "Todos"
             page = null
+            selectedChapterUrl = null
+            selectedChapterTitle = ""
             readerImages = emptyList()
             readerTitle = ""
             needsDomFallback = false
             domFallbackLoading = false
             domFallbackMessage = ""
             currentUrl = destination
+            viewMode = targetMode
+            if (targetMode == "catalog") selectedWork = null
+
             try {
                 val directPage: NexusPage? = try {
                     NexusToonsAdapter.load(destination)
@@ -93,7 +133,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     null
                 }
                 val shouldTryUniversal = directPage == null ||
-                    (directPage.entries.isEmpty() && directPage.readerImages.isEmpty())
+                    (directPage.entries.isEmpty() && directPage.chapters.isEmpty() && directPage.readerImages.isEmpty())
                 val universalPage: UniversalSitePage? = if (shouldTryUniversal) {
                     try {
                         withContext(Dispatchers.IO) { UniversalSiteAdapter.load(destination) }
@@ -103,51 +143,62 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 } else null
 
                 if (directPage == null && universalPage == null) {
-                    throw IllegalStateException("Não foi possível carregar o catálogo Nexus Toons. Verifica a ligação ou tenta abrir o site diretamente.")
+                    throw IllegalStateException("Não foi possível carregar esta página do Nexus Toons. Verifica a ligação e tenta novamente.")
                 }
 
-                val mergedEntries = (
+                val freshEntries = (
                     directPage?.entries.orEmpty() +
                         universalPage?.entries.orEmpty().map { entry ->
                             NexusEntry(entry.title, entry.url, entry.imageUrl, entry.description)
                         }
-                    ).distinctBy { it.url }.take(300)
+                    ).distinctBy { it.url }
+                val mergedEntries = (previousPage?.entries.orEmpty() + freshEntries)
+                    .distinctBy { it.url }.take(500)
+                val mergedChapters = directPage?.chapters.orEmpty().distinctBy { it.url }.take(600)
                 val mergedImages = (directPage?.readerImages.orEmpty() + universalPage?.readerImages.orEmpty())
-                    .distinct().take(120)
+                    .distinct().take(150)
                 val result = NexusPage(
                     title = directPage?.title?.takeIf { it.isNotBlank() }
                         ?: universalPage?.title?.takeIf { it.isNotBlank() }
+                        ?: selectedWork?.title?.takeIf { targetMode == "detail" }
                         ?: "Nexus Toons",
                     url = directPage?.url ?: universalPage?.url ?: destination,
                     entries = mergedEntries,
-                    readerImages = mergedImages
+                    readerImages = mergedImages,
+                    chapters = mergedChapters,
+                    genres = directPage?.genres.orEmpty().distinctBy { it.url }.take(40),
+                    nextPageUrl = directPage?.nextPageUrl,
+                    coverUrl = directPage?.coverUrl,
+                    synopsis = directPage?.synopsis.orEmpty(),
+                    author = directPage?.author.orEmpty(),
+                    status = directPage?.status.orEmpty(),
+                    kind = directPage?.kind.orEmpty(),
+                    rating = directPage?.rating.orEmpty(),
+                    chapterCount = directPage?.chapterCount.orEmpty()
                 )
                 page = result
                 if (result.readerImages.isNotEmpty()) {
                     readerImages = result.readerImages
                     readerTitle = result.title
                 }
-                val requestedPath = runCatching {
-                    java.net.URI(destination).path.orEmpty().trimEnd('/').ifBlank { "/" }.lowercase()
-                }.getOrDefault("/")
-                val isCatalogueLanding = requestedPath in setOf(
-                    "/", "/biblioteca", "/loja", "/catalogo", "/explorar", "/niveis",
-                    "/conquistas", "/comunidade"
-                )
-                if ((result.entries.isEmpty() && result.readerImages.isEmpty()) ||
-                    (isCatalogueLanding && result.entries.size < 12 && result.readerImages.isEmpty())) {
-                    // Use an invisible WebView to enrich the native catalogue for JS-rendered lists.
+
+                val needsExtraction = when (targetMode) {
+                    "reader" -> result.readerImages.isEmpty()
+                    "detail" -> result.chapters.isEmpty()
+                    else -> result.entries.size < 8
+                }
+                if (needsExtraction) {
                     needsDomFallback = true
                     domFallbackLoading = true
                 }
             } catch (e: Exception) {
-                // If both HTML adapters fail, still render the actual site instead of leaving a blank catalogue.
-                error = e.localizedMessage ?: "O leitor direto não conseguiu extrair os títulos."
+                error = e.localizedMessage ?: "O catálogo não conseguiu carregar esta página."
                 page = NexusPage(
-                    title = "Nexus Toons",
+                    title = selectedWork?.title ?: "Nexus Toons",
                     url = destination,
-                    entries = emptyList(),
-                    readerImages = emptyList()
+                    entries = previousPage?.entries.orEmpty(),
+                    readerImages = emptyList(),
+                    chapters = emptyList()
                 )
                 needsDomFallback = true
                 domFallbackLoading = true
@@ -159,298 +210,542 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
 
     LaunchedEffect(startUrl) { load(startUrl, false) }
 
-    Column(Modifier.fillMaxSize().background(Color(0xFF101014)).padding(12.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                if (readerImages.isNotEmpty()) {
-                    readerImages = emptyList()
-                } else if (history.isNotEmpty()) {
-                    val previous = history.last()
-                    history = history.dropLast(1)
-                    load(previous, false)
-                } else {
-                    onBack()
-                }
-            }) { Text("Voltar") }
+    fun goBack() {
+        if (history.isNotEmpty()) {
+            val previous = history.last()
+            history = history.dropLast(1)
+            load(previous, false)
+        } else if (viewMode != "catalog") {
+            load("https://nexustoons.com/", false, forcedMode = "catalog")
+        } else {
+            onBack()
+        }
+    }
+
+    Column(Modifier.fillMaxSize().background(if (viewMode == "reader") Color(0xFF101014) else paper)) {
+        Row(
+            Modifier.fillMaxWidth()
+                .background(if (viewMode == "reader") Color(0xFF101014) else Color(0xFFFFF2EB))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(onClick = { goBack() }) { Text("Voltar") }
             Column(Modifier.weight(1f)) {
-                Text("Nexus Toons · Catálogo", color = Color(0xFFB7A0FF))
-                Text(currentUrl, color = Color(0xFFB8B5C5), fontSize = 10.sp, maxLines = 1)
+                Text(
+                    when (viewMode) {
+                        "reader" -> readerTitle.ifBlank { "Nexus Toons · Leitor" }
+                        "detail" -> selectedWork?.title ?: page?.title ?: "Nexus Toons"
+                        else -> "Nexus Toons · Catálogo"
+                    },
+                    color = if (viewMode == "reader") Color(0xFFB7A0FF) else accent,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(currentUrl, color = if (viewMode == "reader") Color(0xFFB8B5C5) else muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        if (loading || domFallbackLoading) CircularProgressIndicator()
+
+        if (loading) {
+            Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.Center) {
+                CircularProgressIndicator(color = accent)
+            }
+        }
+
         if (error.isNotBlank() && !domFallbackLoading) {
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF402126))) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Não foi possível extrair os títulos diretamente", color = Color.White)
-                    Text(error, color = Color.White, fontSize = 12.sp)
-                    Button(onClick = { load(currentUrl) }) { Text("Tentar novamente") }
-                }
-            }
+            Text(error, Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp), color = Color(0xFFB53C32), fontSize = 12.sp)
         }
-        page?.takeIf { it.entries.isNotEmpty() || readerImages.isNotEmpty() || !needsDomFallback }?.let { loaded ->
-            if (readerImages.isNotEmpty()) {
-                Text(readerTitle, color = Color.White, style = MaterialTheme.typography.titleLarge)
-                Text("${readerImages.size} imagens de página encontradas", color = Color(0xFFB8B5C5))
-                AndroidView(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    factory = { context ->
-                        WebView(context).apply {
-                            settings.javaScriptEnabled = false
-                            settings.domStorageEnabled = false
-                            settings.allowFileAccess = false
-                            settings.allowContentAccess = false
-                            webViewClient = WebViewClient()
-                            loadDataWithBaseURL(
+
+        when (viewMode) {
+            "reader" -> {
+                if (readerImages.isNotEmpty()) {
+                    Text(
+                        readerTitle.ifBlank { page?.title ?: "Capítulo" },
+                        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        readerImages.size.toString() + " páginas",
+                        Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+                        color = Color(0xFFB8B5C5),
+                        fontSize = 12.sp
+                    )
+                    AndroidView(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        factory = { context ->
+                            WebView(context).apply {
+                                settings.javaScriptEnabled = false
+                                settings.domStorageEnabled = false
+                                settings.allowFileAccess = false
+                                settings.allowContentAccess = false
+                                webViewClient = WebViewClient()
+                                setBackgroundColor(android.graphics.Color.rgb(16, 16, 20))
+                                loadDataWithBaseURL(
+                                    "https://nexustoons.com/",
+                                    buildReaderHtml(readerTitle.ifBlank { "Capítulo" }, readerImages),
+                                    "text/html",
+                                    "UTF-8",
+                                    null
+                                )
+                            }
+                        },
+                        update = { view ->
+                            view.loadDataWithBaseURL(
                                 "https://nexustoons.com/",
-                                buildReaderHtml(readerTitle, readerImages),
+                                buildReaderHtml(readerTitle.ifBlank { "Capítulo" }, readerImages),
                                 "text/html",
                                 "UTF-8",
                                 null
                             )
                         }
-                    },
-                    update = { view ->
-                        view.loadDataWithBaseURL(
-                            "https://nexustoons.com/",
-                            buildReaderHtml(readerTitle, readerImages),
-                            "text/html",
-                            "UTF-8",
-                            null
-                        )
-                    }
-                )
-                Button(onClick = { readerImages = emptyList() }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Voltar ao catálogo")
-                }
-            } else {
-                Text(loaded.title, color = Color.White, style = MaterialTheme.typography.titleLarge)
-                OutlinedTextField(
-                    value = filter,
-                    onValueChange = { filter = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Pesquisar títulos") },
-                    singleLine = true
-                )
-                Text("${loaded.entries.size} títulos/capítulos encontrados", color = Color(0xFFB8B5C5), fontSize = 12.sp)
-                val visibleEntries = loaded.entries.filter { it.title.contains(filter.trim(), true) }
-                if (visibleEntries.isEmpty()) {
-                    Text(
-                        if (loaded.entries.isEmpty()) {
-                            if (domFallbackLoading) "A procurar títulos no conteúdo apresentado pelo site…"
-                            else domFallbackMessage.ifBlank { "Não foram encontrados mangás nesta página. Usa a página inicial do catálogo ou tenta atualizar." }
-                        } else {
-                            "Nenhum título corresponde a «${filter.trim()}»."
-                        },
-                        color = Color(0xFFB8B5C5),
-                        fontSize = 13.sp
                     )
+                    Button(
+                        onClick = { goBack() },
+                        modifier = Modifier.fillMaxWidth().padding(10.dp)
+                    ) { Text("Voltar aos capítulos") }
+                } else {
+                    Column(Modifier.weight(1f).fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("A carregar as páginas do capítulo…", color = ink, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (domFallbackLoading) "A aguardar o conteúdo do leitor."
+                            else domFallbackMessage.ifBlank { "Não foram encontradas imagens de leitura nesta página." },
+                            color = muted
+                        )
+                        Button(onClick = { load(currentUrl, false, forcedMode = "reader") }) { Text("Tentar novamente") }
+                    }
                 }
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 78.dp),
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    contentPadding = PaddingValues(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(visibleEntries, key = { it.url }) { entry ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth().clickable { load(entry.url) },
-                            shape = RoundedCornerShape(8.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color.Transparent)
+            }
+
+            "detail" -> {
+                val loaded = page
+                if (loaded == null) {
+                    Text("A carregar os detalhes da obra…", Modifier.padding(18.dp), color = ink)
+                } else {
+                    val displayTitle = if (
+                        loaded.title.equals("Nexus Toons", true) ||
+                        loaded.title.equals("NEXUS TOONS", true) ||
+                        loaded.title.contains("Leia Mangás", true)
+                    ) selectedWork?.title ?: loaded.title else loaded.title
+                    val coverUrl = selectedWork?.imageUrl ?: loaded.coverUrl
+                    Column(
+                        Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.Top) {
+                            if (!coverUrl.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = coverUrl,
+                                    contentDescription = displayTitle,
+                                    modifier = Modifier.size(width = 124.dp, height = 178.dp),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Box(
+                                    Modifier.size(width = 124.dp, height = 178.dp)
+                                        .background(paleCard, RoundedCornerShape(8.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("NEXUS TOONS", color = accent, fontSize = 10.sp)
+                                }
+                            }
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(displayTitle, color = ink, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                OutlinedButton(onClick = { favourite = !favourite }, modifier = Modifier.fillMaxWidth()) {
+                                    Text(if (favourite) "♥ Adicionado aos favoritos" else "♡ Adicionar aos favoritos", color = accent)
+                                }
+                                if (loaded.rating.isNotBlank()) Text("★ " + loaded.rating, color = accent)
+                                if (loaded.kind.isNotBlank()) Text(loaded.kind, color = muted)
+                                if (loaded.status.isNotBlank()) Text(loaded.status, color = muted)
+                                if (loaded.chapterCount.isNotBlank()) Text(loaded.chapterCount + " capítulos", color = muted)
+                            }
+                        }
+
+                        Row(
+                            Modifier.fillMaxWidth().background(Color(0xFFFFE9DE), RoundedCornerShape(10.dp)).padding(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            Column(
-                                Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                if (!entry.imageUrl.isNullOrBlank()) {
-                                    AsyncImage(
-                                        model = entry.imageUrl,
-                                        contentDescription = entry.title,
-                                        modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
-                                        contentScale = ContentScale.Crop
+                            Column(Modifier.weight(1f)) {
+                                Text("Fonte", color = muted, fontSize = 12.sp)
+                                Text("Nexus Toons", color = ink, fontWeight = FontWeight.SemiBold)
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text("Autor", color = muted, fontSize = 12.sp)
+                                Text(loaded.author.ifBlank { "Não indicado" }, color = ink, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
+                        val synopsis = loaded.synopsis.ifBlank { selectedWork?.description.orEmpty() }
+                        if (synopsis.isNotBlank()) {
+                            Text("Sinopse", color = accent, fontWeight = FontWeight.Bold)
+                            Text(synopsis, color = ink)
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Capítulos", color = ink, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text(loaded.chapters.size.toString() + " capítulos encontrados", color = muted, fontSize = 12.sp)
+                            }
+                            if (selectedChapterUrl != null) {
+                                Button(onClick = { load(selectedChapterUrl.orEmpty(), forcedMode = "reader") }) {
+                                    Text("Ler")
+                                }
+                            }
+                        }
+
+                        if (loaded.chapters.isEmpty()) {
+                            Text(
+                                if (domFallbackLoading) "A procurar a lista de capítulos…"
+                                else domFallbackMessage.ifBlank { "Não foi possível reconhecer os capítulos desta obra." },
+                                color = muted
+                            )
+                        } else {
+                            loaded.chapters.forEachIndexed { index, chapter ->
+                                val isSelected = selectedChapterUrl == chapter.url
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().clickable {
+                                        selectedChapterUrl = chapter.url
+                                        selectedChapterTitle = chapter.title
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (isSelected) Color(0xFFFFE5D8) else Color.White
                                     )
-                                } else {
-                                    Box(
-                                        Modifier.fillMaxWidth().aspectRatio(0.68f)
-                                            .background(Color(0xFF302A3B), RoundedCornerShape(6.dp)),
-                                        contentAlignment = Alignment.Center
+                                ) {
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Text("NEXUS", color = Color(0xFFB7A0FF), fontSize = 9.sp)
+                                        Column(Modifier.weight(1f)) {
+                                            Text(chapter.title, color = ink, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                            if (isSelected) Text("Selecionado", color = accent, fontSize = 11.sp)
+                                        }
+                                        TextButton(onClick = {
+                                            selectedChapterUrl = chapter.url
+                                            selectedChapterTitle = chapter.title
+                                        }) { Text("Selecionar", color = accent) }
+                                        Button(onClick = {
+                                            selectedChapterUrl = chapter.url
+                                            selectedChapterTitle = chapter.title
+                                            readerTitle = displayTitle + " · " + chapter.title
+                                            load(chapter.url, forcedMode = "reader")
+                                        }) { Text("Ler") }
                                     }
                                 }
-                                Text(
-                                    entry.title,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Medium,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    fontSize = 12.sp
+                            }
+                        }
+                    }
+                    if (selectedChapterUrl != null && loaded.chapters.isNotEmpty()) {
+                        Button(
+                            onClick = {
+                                readerTitle = displayTitle + " · " + selectedChapterTitle
+                                load(selectedChapterUrl.orEmpty(), forcedMode = "reader")
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) { Text("Ler capítulo selecionado") }
+                    }
+                }
+            }
+
+            else -> {
+                val loaded = page
+                if (loaded == null) {
+                    Text("A preparar o catálogo do Nexus Toons…", Modifier.padding(18.dp), color = ink)
+                } else {
+                    Text(
+                        if (loaded.title.isBlank() || loaded.title.equals("Nexus Toons", true)) "NEXUS TOONS" else loaded.title,
+                        Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 6.dp),
+                        color = ink,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    OutlinedTextField(
+                        value = filter,
+                        onValueChange = { filter = it },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp),
+                        label = { Text("Pesquisar títulos") },
+                        singleLine = true
+                    )
+
+                    if (loaded.genres.isNotEmpty()) {
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(7.dp)
+                        ) {
+                            Text("Géneros", Modifier.padding(horizontal = 5.dp, vertical = 12.dp), color = accent, fontWeight = FontWeight.Bold)
+                            loaded.genres.forEach { genre ->
+                                FilterChip(
+                                    selected = currentUrl == genre.url,
+                                    onClick = { load(genre.url, forcedMode = "catalog") },
+                                    label = { Text(genre.title, color = ink) }
+                                )
+                            }
+                        }
+                    } else {
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(7.dp)
+                        ) {
+                            listOf("Todos", "Manhwa", "Manhua", "Manga", "Novel").forEach { kind ->
+                                FilterChip(
+                                    selected = typeFilter == kind,
+                                    onClick = { typeFilter = kind },
+                                    label = { Text(kind, color = ink) }
                                 )
                             }
                         }
                     }
+
+                    val bySearch = loaded.entries.filter { it.title.contains(filter.trim(), true) }
+                    val visibleEntries = if (typeFilter == "Todos") bySearch else bySearch.filter {
+                        it.kind.equals(typeFilter, ignoreCase = true)
+                    }
+                    val imageCounts = visibleEntries.mapNotNull { it.imageUrl }.groupingBy { it }.eachCount()
+
+                    Text(
+                        visibleEntries.size.toString() + " títulos",
+                        Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                        color = muted,
+                        fontSize = 12.sp
+                    )
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(4),
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(visibleEntries, key = { it.url }) { entry ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    selectedWork = entry
+                                    selectedChapterUrl = null
+                                    selectedChapterTitle = ""
+                                    load(entry.url, forcedMode = "detail")
+                                },
+                                shape = RoundedCornerShape(5.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.Transparent)
+                            ) {
+                                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    val image = entry.imageUrl?.takeIf { (imageCounts[it] ?: 0) == 1 }
+                                    if (!image.isNullOrBlank()) {
+                                        AsyncImage(
+                                            model = image,
+                                            contentDescription = entry.title,
+                                            modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    } else {
+                                        Box(
+                                            Modifier.fillMaxWidth().aspectRatio(0.68f)
+                                                .background(Color(0xFFFFE9DE), RoundedCornerShape(5.dp)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("SEM CAPA", color = accent, fontSize = 9.sp)
+                                        }
+                                    }
+                                    Text(
+                                        entry.title,
+                                        color = ink,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        fontSize = 12.sp
+                                    )
+                                    if (entry.rating.isNotBlank()) {
+                                        Text("★ " + entry.rating, color = accent, fontSize = 10.sp)
+                                    }
+                                }
+                            }
+                        }
+                        val nextPage = loaded.nextPageUrl ?: NexusToonsAdapter.guessedNextPageUrl(currentUrl)
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Button(
+                                onClick = {
+                                    if (nextPage != null) {
+                                        load(nextPage, appendEntries = true, forcedMode = "catalog")
+                                    } else {
+                                        domFallbackMessage = "Esta página não disponibilizou um link para carregar mais títulos."
+                                    }
+                                },
+                                enabled = nextPage != null && !loading,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                            ) { Text("Carregar mais títulos") }
+                        }
+                    }
                 }
-                Text(
-                    "Os títulos são extraídos do conteúdo público do site. A disponibilidade depende da estrutura que o Nexus Toons apresenta.",
-                    color = Color(0xFFB8B5C5),
-                    fontSize = 11.sp
-                )
             }
         }
 
         if (needsDomFallback) {
-            // Keep a hidden WebView only as a JavaScript DOM reader. The website itself is never
-            // displayed inside the catalogue; successful extraction populates the native grid above.
-            AndroidView(
-                modifier = Modifier.size(1.dp),
-                factory = { context ->
-                    WebView(context).apply {
-                        visibility = View.INVISIBLE
-                        tag = currentUrl
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.databaseEnabled = true
-                        settings.loadsImagesAutomatically = true
-                        settings.blockNetworkImage = false
-                        settings.javaScriptCanOpenWindowsAutomatically = true
-                        settings.setSupportMultipleWindows(false)
-                        settings.allowFileAccess = false
-                        settings.allowContentAccess = false
-                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                        // Nexus Toons renders its catalogue with client-side JavaScript. Use a current
-                        // Android Chrome user agent so the site does not serve an empty/unsupported view.
-                        settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-                        webViewClient = object : WebViewClient() {
-                            @Suppress("DEPRECATION")
-                            override fun onReceivedError(
-                                view: WebView?,
-                                errorCode: Int,
-                                description: String?,
-                                failingUrl: String?
-                            ) {
-                                domFallbackLoading = false
-                                domFallbackMessage = "O navegador não conseguiu carregar esta página: " +
-                                    (description ?: "erro de ligação") + ". Verifica a ligação ou tenta novamente."
-                            }
-
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                val web = view ?: return
-                                val finishedUrl = url ?: return
-                                if (!NexusToonsAdapter.supports(finishedUrl)) return
-                                // Wait for the JavaScript catalogue to render before inspecting the DOM.
-                                // The page can populate its catalogue asynchronously; retry DOM extraction before giving up.
-                                var extractionAttempts = 0
-                                fun extractDomWhenReady() {
-                                    if (web.url != finishedUrl) return
-                                    extractionAttempts += 1
-                                    web.evaluateJavascript(NEXUS_DOM_EXTRACTION_SCRIPT) { raw ->
-                                    val payload = try {
-                                        JSONTokener(raw).nextValue() as? String
-                                    } catch (_: Exception) {
-                                        null
-                                    }
-                                    val data = try {
-                                        payload?.let { JSONObject(it) }
-                                    } catch (_: Exception) {
-                                        null
-                                    }
-                                    if (data == null) {
-                                        if (extractionAttempts < 6) {
-                                            web.postDelayed({ extractDomWhenReady() }, 1200L)
-                                        } else {
-                                            domFallbackLoading = false
-                                            needsDomFallback = false
-                                            domFallbackMessage = "Não foi possível reconhecer os títulos automaticamente. Tenta novamente ou verifica a ligação."
-                                        }
-                                        return@evaluateJavascript
-                                    }
-
-                                    val entryArray = data.optJSONArray("entries") ?: JSONArray()
-                                    val extracted = (0 until entryArray.length()).mapNotNull { index ->
-                                        val item = entryArray.optJSONObject(index) ?: return@mapNotNull null
-                                        val title = item.optString("title", "").trim()
-                                        val entryUrl = item.optString("url", "").trim()
-                                        if (title.isBlank() || entryUrl.isBlank() ||
-                                            !NexusToonsAdapter.supports(entryUrl) ||
-                                            !entryUrl.startsWith("https://")) return@mapNotNull null
-                                        NexusEntry(
-                                            title = title,
-                                            url = entryUrl,
-                                            imageUrl = item.optString("image", "").takeIf { it.startsWith("https://") },
-                                            description = item.optString("description", "").take(300)
-                                        )
-                                    }.distinctBy { it.url }.take(300)
-
-                                    val imageArray = data.optJSONArray("readerImages") ?: JSONArray()
-                                    val extractedImages = (0 until imageArray.length()).mapNotNull { index ->
-                                        imageArray.optString(index).takeIf {
-                                            it.startsWith("https://") && !it.contains("data:image", true)
-                                        }
-                                    }.distinct().take(100)
-
-                                    if (extracted.isEmpty() && extractedImages.isEmpty() && extractionAttempts < 6) {
-                                        web.postDelayed({ extractDomWhenReady() }, 1200L)
-                                        return@evaluateJavascript
-                                    }
-
-                                    val currentPage = page
-                                    val fallbackTitle = data.optString("title", "Nexus Toons")
-                                        .ifBlank { "Nexus Toons" }
-                                    val combinedEntries = (currentPage?.entries.orEmpty() + extracted)
-                                        .distinctBy { it.url }
-                                        .take(300)
-                                    val combinedImages = if (extractedImages.isNotEmpty()) extractedImages
-                                        else currentPage?.readerImages.orEmpty()
-                                    page = NexusPage(
-                                        title = fallbackTitle,
-                                        url = currentPage?.url ?: currentUrl,
-                                        entries = combinedEntries,
-                                        readerImages = combinedImages
-                                    )
-                                    if (combinedImages.isNotEmpty()) {
-                                        readerImages = combinedImages
-                                        readerTitle = fallbackTitle
-                                    }
-                                    error = ""
+            key(currentUrl) {
+                AndroidView(
+                    modifier = Modifier.size(1.dp),
+                    factory = { context ->
+                        WebView(context).apply {
+                            visibility = View.INVISIBLE
+                            tag = currentUrl
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.databaseEnabled = true
+                            settings.loadsImagesAutomatically = true
+                            settings.blockNetworkImage = false
+                            settings.allowFileAccess = false
+                            settings.allowContentAccess = false
+                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                            settings.userAgentString =
+                                "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+                            webViewClient = object : WebViewClient() {
+                                @Suppress("DEPRECATION")
+                                override fun onReceivedError(
+                                    view: WebView?,
+                                    errorCode: Int,
+                                    description: String?,
+                                    failingUrl: String?
+                                ) {
                                     domFallbackLoading = false
-                                    needsDomFallback = combinedEntries.isEmpty() && combinedImages.isEmpty()
-                                    domFallbackMessage = if (combinedEntries.isEmpty() && combinedImages.isEmpty()) {
-                                        data.optString("debug", "O catálogo não forneceu títulos reconhecíveis.") +
-                                            " O catálogo nativo não encontrou obras nesta página; tenta novamente."
-                                    } else ""
-                                    }
+                                    domFallbackMessage = "Não foi possível ler o conteúdo desta página. Verifica a ligação."
                                 }
-                                web.postDelayed({ extractDomWhenReady() }, 1200L)
+
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    val web = view ?: return
+                                    val finishedUrl = url ?: return
+                                    if (!NexusToonsAdapter.supports(finishedUrl)) return
+                                    var extractionAttempts = 0
+                                    fun extractDomWhenReady() {
+                                        if (web.url != finishedUrl) return
+                                        extractionAttempts += 1
+                                        web.evaluateJavascript(NEXUS_DOM_EXTRACTION_SCRIPT) { raw ->
+                                            val payload = try {
+                                                JSONTokener(raw).nextValue() as? String
+                                            } catch (_: Exception) { null }
+                                            val data = try { payload?.let { JSONObject(it) } } catch (_: Exception) { null }
+                                            if (data == null) {
+                                                if (extractionAttempts < 6) {
+                                                    web.postDelayed({ extractDomWhenReady() }, 1200L)
+                                                } else {
+                                                    domFallbackLoading = false
+                                                    needsDomFallback = false
+                                                    domFallbackMessage = "Não foi possível reconhecer o catálogo. Tenta novamente."
+                                                }
+                                                return@evaluateJavascript
+                                            }
+
+                                            fun parseEntryArray(name: String, maxCount: Int): List<NexusEntry> {
+                                                val array = data.optJSONArray(name) ?: JSONArray()
+                                                return (0 until minOf(array.length(), maxCount)).mapNotNull { index ->
+                                                    val item = array.optJSONObject(index) ?: return@mapNotNull null
+                                                    val title = item.optString("title", "").trim()
+                                                    val entryUrl = item.optString("url", "").trim()
+                                                    if (title.isBlank() || entryUrl.isBlank() ||
+                                                        !NexusToonsAdapter.supports(entryUrl) ||
+                                                        !entryUrl.startsWith("https://")) return@mapNotNull null
+                                                    val genreArray = item.optJSONArray("genres") ?: JSONArray()
+                                                    val genres = (0 until genreArray.length()).map { genreArray.optString(it) }
+                                                    NexusEntry(
+                                                        title = title,
+                                                        url = entryUrl,
+                                                        imageUrl = item.optString("image", "").takeIf { it.startsWith("https://") },
+                                                        description = item.optString("description", "").take(500),
+                                                        kind = item.optString("kind", ""),
+                                                        status = item.optString("status", ""),
+                                                        rating = item.optString("rating", ""),
+                                                        chapterCount = item.optString("chapterCount", ""),
+                                                        genres = genres
+                                                    )
+                                                }.distinctBy { it.url }
+                                            }
+
+                                            val extractedEntries = parseEntryArray("entries", 500)
+                                            val extractedChapters = parseEntryArray("chapters", 600)
+                                            val genreArray = data.optJSONArray("genres") ?: JSONArray()
+                                            val extractedGenres = (0 until minOf(genreArray.length(), 40)).mapNotNull { index ->
+                                                val item = genreArray.optJSONObject(index) ?: return@mapNotNull null
+                                                val title = item.optString("title", "").trim()
+                                                val link = item.optString("url", "").trim()
+                                                if (title.isBlank() || !NexusToonsAdapter.supports(link)) null else NexusGenre(title, link)
+                                            }.distinctBy { it.url }
+                                            val imageArray = data.optJSONArray("readerImages") ?: JSONArray()
+                                            val extractedImages = (0 until imageArray.length()).mapNotNull { index ->
+                                                imageArray.optString(index).takeIf { it.startsWith("https://") && !it.contains("data:image", true) }
+                                            }.distinct().take(150)
+
+                                            if (extractedEntries.isEmpty() && extractedChapters.isEmpty() &&
+                                                extractedImages.isEmpty() && extractionAttempts < 6) {
+                                                web.postDelayed({ extractDomWhenReady() }, 1200L)
+                                                return@evaluateJavascript
+                                            }
+
+                                            val oldPage = page
+                                            val combinedEntries = (oldPage?.entries.orEmpty() + extractedEntries)
+                                                .distinctBy { it.url }.take(500)
+                                            val combinedChapters = (oldPage?.chapters.orEmpty() + extractedChapters)
+                                                .distinctBy { it.url }.take(600)
+                                            val combinedImages = (extractedImages + oldPage?.readerImages.orEmpty()).distinct().take(150)
+                                            val nextUrl = data.optString("nextPageUrl", "")
+                                                .takeIf { it.startsWith("https://") && NexusToonsAdapter.supports(it) }
+                                            page = NexusPage(
+                                                title = data.optString("title", oldPage?.title ?: "Nexus Toons").ifBlank { "Nexus Toons" },
+                                                url = oldPage?.url ?: currentUrl,
+                                                entries = combinedEntries,
+                                                readerImages = combinedImages,
+                                                chapters = combinedChapters,
+                                                genres = (oldPage?.genres.orEmpty() + extractedGenres).distinctBy { it.url }.take(40),
+                                                nextPageUrl = nextUrl ?: oldPage?.nextPageUrl,
+                                                coverUrl = data.optString("coverUrl", "").takeIf { it.startsWith("https://") } ?: oldPage?.coverUrl,
+                                                synopsis = data.optString("synopsis", "").ifBlank { oldPage?.synopsis.orEmpty() },
+                                                author = data.optString("author", "").ifBlank { oldPage?.author.orEmpty() },
+                                                status = data.optString("status", "").ifBlank { oldPage?.status.orEmpty() },
+                                                kind = data.optString("kind", "").ifBlank { oldPage?.kind.orEmpty() },
+                                                rating = data.optString("rating", "").ifBlank { oldPage?.rating.orEmpty() },
+                                                chapterCount = data.optString("chapterCount", "").ifBlank { oldPage?.chapterCount.orEmpty() }
+                                            )
+                                            if (combinedImages.isNotEmpty()) {
+                                                readerImages = combinedImages
+                                                readerTitle = data.optString("title", oldPage?.title ?: "Capítulo").ifBlank { "Capítulo" }
+                                                viewMode = "reader"
+                                            }
+                                            error = ""
+                                            domFallbackLoading = false
+                                            needsDomFallback = when (viewMode) {
+                                                "reader" -> combinedImages.isEmpty()
+                                                "detail" -> combinedChapters.isEmpty()
+                                                else -> combinedEntries.isEmpty()
+                                            }
+                                            domFallbackMessage = if (needsDomFallback) {
+                                                data.optString("debug", "Não foram encontrados elementos suficientes.")
+                                            } else ""
+                                        }
+                                    }
+                                    web.postDelayed({ extractDomWhenReady() }, 1200L)
+                                }
                             }
+                            loadUrl(currentUrl)
                         }
-                        loadUrl(currentUrl)
+                    },
+                    update = { view ->
+                        view.visibility = View.INVISIBLE
+                        val taggedUrl = view.tag as? String
+                        if (taggedUrl != currentUrl) {
+                            view.tag = currentUrl
+                            view.loadUrl(currentUrl)
+                        }
                     }
-                },
-                update = { view ->
-                    view.visibility = View.INVISIBLE
-                    val taggedUrl = view.tag as? String
-                    if (taggedUrl != currentUrl) {
-                        view.tag = currentUrl
-                        view.loadUrl(currentUrl)
-                    }
-                }
-            )
-            Text(
-                if (domFallbackLoading) {
-                    "A preparar o catálogo interno e a procurar títulos, capas e capítulos…"
-                } else {
-                    "Não foi possível reconhecer títulos nesta página. O site original permanece oculto."
-                },
-                color = Color(0xFFB8B5C5),
-                fontSize = 11.sp
-            )
+                )
+            }
+            if (domFallbackLoading) {
+                Text("A identificar capas e capítulos…", Modifier.padding(6.dp), color = muted, fontSize = 11.sp)
+            }
         }
-        if (domFallbackMessage.isNotBlank() && page?.entries.isNullOrEmpty() && !domFallbackLoading) {
-            Text(domFallbackMessage, color = Color(0xFFB8B5C5), fontSize = 12.sp)
-            Button(onClick = { load(currentUrl) }) { Text("Tentar novamente") }
+        if (domFallbackMessage.isNotBlank() && !domFallbackLoading && page?.entries.isNullOrEmpty() && page?.chapters.isNullOrEmpty() && readerImages.isEmpty()) {
+            Text(domFallbackMessage, Modifier.padding(10.dp), color = muted, fontSize = 12.sp)
+            TextButton(onClick = { load(currentUrl, false) }) { Text("Tentar novamente", color = accent) }
         }
     }
 }
+
 
 private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
 (function() {
