@@ -1,5 +1,6 @@
 package com.blackmanga.app
 
+import android.view.View
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -290,11 +291,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         }
 
         if (needsDomFallback) {
-            // The WebView remains visible if native extraction cannot recognize the catalogue.
+            // Keep a hidden WebView only as a JavaScript DOM reader. The website itself is never
+            // displayed inside the catalogue; successful extraction populates the native grid above.
             AndroidView(
-                modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp),
+                modifier = Modifier.size(1.dp),
                 factory = { context ->
                     WebView(context).apply {
+                        visibility = View.INVISIBLE
                         tag = currentUrl
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
@@ -348,7 +351,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             web.postDelayed({ extractDomWhenReady() }, 1200L)
                                         } else {
                                             domFallbackLoading = false
-                                            domFallbackMessage = "Não foi possível ler a estrutura desta página. O site continua visível abaixo; podes navegar nele sem ficar numa tela vazia."
+                                            domFallbackMessage = "Não foi possível reconhecer os títulos automaticamente. Tenta novamente ou verifica a ligação."
                                         }
                                         return@evaluateJavascript
                                     }
@@ -401,8 +404,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     domFallbackLoading = false
                                     needsDomFallback = combinedEntries.isEmpty() && combinedImages.isEmpty()
                                     domFallbackMessage = if (combinedEntries.isEmpty() && combinedImages.isEmpty()) {
-                                        data.optString("debug", "O site abriu, mas não forneceu títulos reconhecíveis.") +
-                                            " A página permanece visível para navegação; a extração nativa pode precisar de mais seletores."
+                                        data.optString("debug", "O catálogo não forneceu títulos reconhecíveis.") +
+                                            " A página original fica oculta; tenta novamente ou verifica a ligação."
                                     } else ""
                                     }
                                 }
@@ -413,6 +416,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     }
                 },
                 update = { view ->
+                    view.visibility = View.INVISIBLE
                     val taggedUrl = view.tag as? String
                     if (taggedUrl != currentUrl) {
                         view.tag = currentUrl
@@ -422,9 +426,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             )
             Text(
                 if (domFallbackLoading) {
-                    "A carregar o site e a tentar reconhecer títulos, capas e capítulos…"
+                    "A preparar o catálogo interno e a procurar títulos, capas e capítulos…"
                 } else {
-                    "O reconhecimento automático não encontrou elementos suficientes. O site fica aberto abaixo para navegação."
+                    "Não foi possível reconhecer títulos nesta página. O site original permanece oculto."
                 },
                 color = Color(0xFFB8B5C5),
                 fontSize = 11.sp
