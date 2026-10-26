@@ -7,13 +7,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -30,11 +34,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -42,7 +51,8 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var currentUrl by remember(startUrl) { mutableStateOf(startUrl) }
+    var currentUrl by remember(startUrl) { mutableStateOf(NexusToonsAdapter.normalizeCatalogueStart(startUrl)) }
+    var history by remember(startUrl) { mutableStateOf(emptyList<String>()) }
     var page by remember { mutableStateOf<NexusPage?>(null) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
@@ -53,7 +63,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     var domFallbackLoading by remember { mutableStateOf(false) }
     var domFallbackMessage by remember { mutableStateOf("") }
 
-    fun load(url: String) {
+    fun load(url: String, saveHistory: Boolean = true) {
+        val destination = NexusToonsAdapter.normalizeCatalogueStart(url)
+        if (!NexusToonsAdapter.supports(destination)) {
+            error = "Este endereço não pertence ao Nexus Toons."
+            return
+        }
+        if (saveHistory && currentUrl != destination) history = history + currentUrl
         scope.launch {
             loading = true
             error = ""
@@ -64,10 +80,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             needsDomFallback = false
             domFallbackLoading = false
             domFallbackMessage = ""
-            currentUrl = url
+            currentUrl = destination
             try {
                 val directPage: NexusPage? = try {
-                    NexusToonsAdapter.load(url)
+                    NexusToonsAdapter.load(destination)
                 } catch (_: Exception) {
                     null
                 }
@@ -75,7 +91,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     (directPage.entries.isEmpty() && directPage.readerImages.isEmpty())
                 val universalPage: UniversalSitePage? = if (shouldTryUniversal) {
                     try {
-                        withContext(Dispatchers.IO) { UniversalSiteAdapter.load(url) }
+                        withContext(Dispatchers.IO) { UniversalSiteAdapter.load(destination) }
                     } catch (_: Exception) {
                         null
                     }
@@ -116,7 +132,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 error = e.localizedMessage ?: "O leitor direto não conseguiu extrair os títulos."
                 page = NexusPage(
                     title = "Nexus Toons",
-                    url = url,
+                    url = destination,
                     entries = emptyList(),
                     readerImages = emptyList()
                 )
@@ -128,11 +144,21 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(startUrl) { load(startUrl) }
+    LaunchedEffect(startUrl) { load(startUrl, false) }
 
     Column(Modifier.fillMaxSize().background(Color(0xFF101014)).padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onBack) { Text("Voltar") }
+            Button(onClick = {
+                if (readerImages.isNotEmpty()) {
+                    readerImages = emptyList()
+                } else if (history.isNotEmpty()) {
+                    val previous = history.last()
+                    history = history.dropLast(1)
+                    load(previous, false)
+                } else {
+                    onBack()
+                }
+            }) { Text("Voltar") }
             Column(Modifier.weight(1f)) {
                 Text("Nexus Toons · Catálogo", color = Color(0xFFB7A0FF))
                 Text(currentUrl, color = Color(0xFFB8B5C5), fontSize = 10.sp, maxLines = 1)
@@ -198,7 +224,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     Text(
                         if (loaded.entries.isEmpty()) {
                             if (domFallbackLoading) "A procurar títulos no conteúdo apresentado pelo site…"
-                            else domFallbackMessage.ifBlank { "Não foram encontrados títulos nesta página. Experimenta atualizar ou abrir a página inicial da fonte." }
+                            else domFallbackMessage.ifBlank { "Não foram encontrados mangás nesta página. Usa a página inicial do catálogo ou tenta atualizar." }
                         } else {
                             "Nenhum título corresponde a «${filter.trim()}»."
                         },
@@ -208,26 +234,70 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 }
                 Column(
                     Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    visibleEntries.forEach { entry ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A22))
+                    visibleEntries.chunked(2).forEach { rowEntries ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(entry.title, color = Color.White, style = MaterialTheme.typography.titleMedium)
-                                if (entry.description.isNotBlank()) {
-                                    Text(entry.description, color = Color(0xFFB8B5C5), fontSize = 12.sp)
+                            rowEntries.forEach { entry ->
+                                Card(
+                                    modifier = Modifier.weight(1f).clickable { load(entry.url) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A22))
+                                ) {
+                                    Column(
+                                        Modifier.fillMaxWidth().padding(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        if (!entry.imageUrl.isNullOrBlank()) {
+                                            AsyncImage(
+                                                model = entry.imageUrl,
+                                                contentDescription = entry.title,
+                                                modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
+                                                contentScale = ContentScale.Crop
+                                            )
+                                        } else {
+                                            Box(
+                                                Modifier.fillMaxWidth().aspectRatio(0.68f)
+                                                    .background(Color(0xFF302A3B), RoundedCornerShape(8.dp)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text("NEXUS TOONS", color = Color(0xFFB7A0FF), fontSize = 10.sp)
+                                            }
+                                        }
+                                        Text(
+                                            entry.title,
+                                            color = Color.White,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (entry.description.isNotBlank()) {
+                                            Text(
+                                                entry.description,
+                                                color = Color(0xFFB8B5C5),
+                                                fontSize = 11.sp,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Text(
+                                            if (entry.url.contains("/r/", true) ||
+                                                entry.url.contains("capitulo", true) ||
+                                                entry.url.contains("chapter", true) ||
+                                                entry.url.contains("read", true)) "Abrir capítulo ›"
+                                            else "Ver obra ›",
+                                            color = Color(0xFFB7A0FF),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
                                 }
-                                Button(onClick = { load(entry.url) }, modifier = Modifier.fillMaxWidth()) {
-                                    Text(
-                                        if (entry.title.contains(Regex("cap[.íi]?t?u?l?o?\\s*\\d+", RegexOption.IGNORE_CASE)) ||
-                                            entry.url.contains("cap", true) ||
-                                            entry.url.contains("chapter", true) ||
-                                            entry.url.contains("ler", true)) "Abrir capítulo" else "Abrir obra"
-                                    )
-                                }
+                            }
+                            if (rowEntries.size == 1) {
+                                Spacer(Modifier.weight(1f))
                             }
                         }
                     }
