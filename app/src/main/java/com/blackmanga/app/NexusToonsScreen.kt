@@ -749,161 +749,237 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
 
 private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
 (function() {
+  const rootHost = String(location.hostname || '').toLowerCase().replace(/^www\./, '');
   const hostAllowed = host => {
     const h = String(host || '').toLowerCase().replace(/^www\./, '');
     return h === 'nexustoons.com' || h.endsWith('.nexustoons.com');
   };
+  const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
   const generic = /^(ver detalhes|detalhes|ler agora|ler|abrir|ver mais|saiba mais|continuar lendo|read more|view more|view details|home|in[ií]cio|menu|pesquisar|buscar)$/i;
-  // Do not exclude /obras or /novels: a source can use these as valid title routes.
-  const banned = new Set(['categoria','categorias','category','categories','genero','generos','genre','genres','tag','tags','search','pesquisa','pesquisar','busca','login','logout','register','registrar','u','user','users','perfil','profile','conta','account','sobre','contato','contact','politica','termos','ranking','notificacoes','notifications','loja','biblioteca','niveis','conquistas','comunidade','comunidades']);
-  const catalogueRoutes = new Set(['/','/biblioteca','/loja','/catalogo','/explorar','/niveis','/níveis','/conquistas','/comunidade','/comunidades']);
+  const banned = new Set(['categoria','categorias','category','categories','genero','generos','genre','genres','tag','tags','search','pesquisa','pesquisar','busca','login','logout','register','registrar','user','users','perfil','profile','conta','account','sobre','contato','contact','politica','termos','ranking','notificacoes','notifications','loja','biblioteca','niveis','conquistas','comunidade','comunidades','cart']);
   const currentPath = (location.pathname || '/').replace(/\/$/, '').toLowerCase() || '/';
-  const entries = [];
-  const seen = new Set();
-  const tidy = s => String(s || '').replace(/\s+/g, ' ').trim();
-  const urlOf = a => {
-    try { return new URL(a.href || a.getAttribute('href') || '', location.href); }
+  const catalogueRoutes = new Set(['/','/biblioteca','/loja','/catalogo','/explorar','/niveis','/níveis','/conquistas','/comunidade','/comunidades']);
+  const isCatalogue = catalogueRoutes.has(currentPath) ||
+    /^\/(genero|generos|genre|genres|categoria|categorias|tag)\//.test(currentPath) ||
+    /\/(page|pagina)\/\d+$/.test(currentPath) ||
+    /(?:^|&)(?:page|paged)=\d+/i.test(location.search.slice(1));
+  const isReader = /^\/r\//.test(location.pathname) ||
+    /\/(capitulo|chapter|leitura|reader|read|episode|episodio|page|pagina)\//i.test(location.pathname) ||
+    /cap[ií]tulo|chapter|leitura|reader|epis[oó]dio/i.test(location.pathname);
+  const sameSite = url => url && url.protocol === 'https:' && hostAllowed(url.hostname);
+  const urlOf = anchor => {
+    try { return new URL(anchor.href || anchor.getAttribute('href') || '', location.href); }
     catch(e) { return null; }
   };
-  const allowedLink = a => {
-    if (a.closest('nav,header,footer,[role="navigation"]')) return false;
-    const u = urlOf(a);
-    if (!u || u.protocol !== 'https:' || !hostAllowed(u.hostname)) return false;
-    const parts = u.pathname.split('/').filter(Boolean);
-    if (!parts.length || banned.has(parts[0].toLowerCase())) return false;
-    const targetPath = (u.pathname || '/').replace(/\/$/, '').toLowerCase() || '/';
-    // Work routes may use /obra/, /series/, /manga/ or custom slugs. Exclude navigation
-    // sections above, but don't require a particular first URL segment on the home page.
-    // On a work-detail page, skip links to other works but keep chapter paths and /r/ routes.
-    if (currentPath.startsWith('/manga/') && parts[0].toLowerCase() === 'manga' && parts.length <= 2) return false;
-    if (targetPath === currentPath || u.href.split('#')[0] === location.href.split('#')[0]) return false;
-    return true;
+  const validLink = anchor => {
+    if (!anchor) return null;
+    const url = urlOf(anchor);
+    if (!sameSite(url)) return null;
+    const path = (url.pathname || '/').replace(/\/$/, '').toLowerCase() || '/';
+    if (path === currentPath || url.href.split('#')[0] === location.href.split('#')[0]) return null;
+    return url;
   };
-  const imageOf = img => {
+  const imageUrl = img => {
     if (!img) return '';
+    const classes = ((img.className || '') + ' ' + (img.id || '') + ' ' + (img.getAttribute('alt') || '')).toLowerCase();
+    if (/(avatar|profile|user-icon|emoji|favicon|sprite|mascot|placeholder)/i.test(classes)) return '';
     const candidates = [
       img.getAttribute('data-src'), img.getAttribute('data-lazy-src'),
-      img.getAttribute('data-original'), img.getAttribute('data-url'),
-      img.getAttribute('data-lazyload'), img.currentSrc, img.src,
-      (img.getAttribute('srcset') || '').split(',').pop().trim().split(/\s+/)[0]
+      img.getAttribute('data-original'), img.getAttribute('data-lazyload'),
+      img.getAttribute('data-url'), img.getAttribute('data-srcset'),
+      img.getAttribute('data-lazy-srcset'), img.currentSrc, img.src,
+      img.getAttribute('srcset')
     ];
-    for (const candidate of candidates) {
+    for (const raw of candidates) {
+      const candidate = clean(raw).split(',')[0].split(/\s+/)[0];
       if (!candidate || candidate.startsWith('data:image')) continue;
       try {
-        const u = new URL(candidate, location.href);
-        if (u.protocol === 'https:') return u.href;
+        const resolved = new URL(candidate, location.href);
+        if (resolved.protocol !== 'https:') continue;
+        if (/(logo|avatar|favicon|emoji|sprite|mascot|placeholder|profile|banner-ad)/i.test(resolved.href)) continue;
+        return resolved.href;
       } catch(e) {}
     }
     return '';
   };
-  const add = (title, anchor, source, cardOverride) => {
-    title = tidy(title);
-    if (!anchor || !allowedLink(anchor) || title.length < 2 || title.length > 180 || generic.test(title)) return;
-    const u = urlOf(anchor);
-    if (!u) return;
-    const key = u.href.split('#')[0];
-    if (seen.has(key)) return;
-    seen.add(key);
-    let node = cardOverride || anchor;
-    let image = imageOf(anchor.querySelector('img'));
-    let description = '';
-    for (let i = 0; i < 7 && node; i++, node = node.parentElement) {
-      if (!image) image = imageOf(node.querySelector('img'));
-      if (!description && node.querySelector('p,[class*=description],[class*=summary]')) {
-        const p = node.querySelector('p,[class*=description],[class*=summary]');
-        description = tidy(p.innerText || p.textContent);
-      }
-      if (i > 0 && node.querySelectorAll('h1,h2,h3,h4,h5,h6').length > 4) break;
+  const cardFor = anchor => {
+    let node = anchor;
+    for (let depth = 0; depth < 9 && node; depth++, node = node.parentElement) {
+      const classes = ((node.className || '') + ' ' + (node.id || '')).toLowerCase();
+      const workLinks = node.querySelectorAll ? node.querySelectorAll('a[href*="/manga/"]').length : 0;
+      const images = node.querySelectorAll ? node.querySelectorAll('img').length : 0;
+      const likely = node.matches && node.matches('article,li,.swiper-slide,.page-item-detail,.c-tabs-item__content,.bsx,.utao,.manga-item,.manga-card,.series-item,.book-item,.post-item,.item,.thumbnail,.manga-listing .manga');
+      const named = /(manga|manhwa|manhua|comic|series|book|cover|thumb|poster|post-item|entry-card|swiper-slide)/.test(classes);
+      if ((likely || named) && workLinks >= 1 && workLinks <= 3 && images >= 1 && images <= 6) return node;
     }
-    entries.push({title:title, url:key, image:image, description:description.slice(0,300), source:source || 'link'});
+    return anchor.closest('article,li,.swiper-slide,.page-item-detail,.c-tabs-item__content,.bsx,.utao,.manga-item,.manga-card,.series-item,.book-item,.item');
   };
-  const chapterLabel = /^(cap\.?|cap[ií]tulo|chapter|ep[ií]s[oó]dio|episode|p[aá]gina)\s*\d*/i;
-  const cardSelector = [
-    'article', 'li', '[class*=manga-card]', '[class*=obra-card]', '[class*=work-card]',
-    '[class*=series-card]', '[class*=comic-card]', '[class*=manga-item]', '[class*=obra-item]',
-    '[class*=series-item]', '[class*=book-item]', '[data-testid*=manga]', '[data-testid*=obra]'
-  ].join(',');
-  const cards = Array.from(document.querySelectorAll(cardSelector));
-  for (const card of cards) {
-    const heading = card.querySelector('h1,h2,h3,h4,h5,h6,[class*=title],[class*=titulo],[class*=name],[data-testid*=title]');
-    const image = card.querySelector('img');
-    const title = tidy(heading && (heading.innerText || heading.textContent)) ||
-      tidy(image && image.getAttribute('alt')) ||
-      tidy(card.querySelector('a[title]') && card.querySelector('a[title]').getAttribute('title'));
-    if (title.length < 2 || title.length > 180 || generic.test(title)) continue;
-    const links = Array.from(card.querySelectorAll('a[href]')).filter(allowedLink);
-    if (!links.length) continue;
-    const linkedHeading = heading && heading.closest('a[href]');
-    const best = linkedHeading && allowedLink(linkedHeading) ? linkedHeading :
-      (links.find(a => /^(ver detalhes|detalhes|view details)$/i.test(tidy(a.innerText || a.textContent))) ||
-       links.find(a => !chapterLabel.test(tidy(a.innerText || a.textContent))) || links[0]);
-    add(title, best, 'nexus-card', card);
-  }
-
-  const allAnchors = Array.from(document.querySelectorAll('a[href]'));
-  const sameSiteAnchors = allAnchors.filter(allowedLink);
-  for (const a of sameSiteAnchors) {
-    let title = tidy(a.innerText || a.textContent || '');
-    if (catalogueRoutes.has(currentPath) && chapterLabel.test(title)) continue;
-    if (title.length > 180 || generic.test(title) || title.length < 2) {
-      let node = a;
-      for (let i = 0; i < 8 && node; i++, node = node.parentElement) {
-        const headings = Array.from(node.querySelectorAll('h1,h2,h3,h4,h5,h6,[class*=title],[class*=titulo],[class*=name]'));
-        const candidate = headings.map(h => tidy(h.innerText || h.textContent))
-          .find(t => t.length >= 2 && t.length <= 180 && !generic.test(t));
-        if (candidate) { title = candidate; break; }
-        if (i >= 3 && node.querySelectorAll('a[href]').length > 15) break;
+  const chooseCover = (anchor, card) => {
+    const images = [];
+    if (anchor && anchor.querySelectorAll) images.push(...Array.from(anchor.querySelectorAll('img')));
+    if (card && card.querySelectorAll) images.push(...Array.from(card.querySelectorAll('img')));
+    const unique = Array.from(new Set(images));
+    const ranked = unique.map(img => {
+      const url = imageUrl(img);
+      if (!url) return {url:'', score:-1000};
+      const classes = ((img.className || '') + ' ' + (img.id || '')).toLowerCase();
+      const alt = clean(img.getAttribute('alt'));
+      let score = 0;
+      if (/(cover|thumb|thumbnail|poster|manga|manhwa|manhua|book|wp-post-image|attachment)/.test(classes)) score += 45;
+      if (alt.length > 2 && !generic.test(alt)) score += 12;
+      if (Number(img.getAttribute('width') || img.naturalWidth || 0) >= 100) score += 10;
+      if (Number(img.getAttribute('height') || img.naturalHeight || 0) >= 150) score += 10;
+      if (/wp-content\/uploads|\/uploads\//i.test(url)) score += 6;
+      if (/(avatar|profile|logo|icon|mascot|sprite|emoji|placeholder|banner)/i.test(classes + ' ' + url)) score -= 100;
+      if (anchor && anchor.contains(img)) score += 8;
+      return {url:url,score:score};
+    }).filter(item => item.url).sort((a,b) => b.score-a.score);
+    if (ranked.length) return ranked[0].url;
+    if (card) {
+      const bgNodes = [card, ...Array.from(card.querySelectorAll('[style*="background"]'))];
+      for (const node of bgNodes) {
+        const style = node.getAttribute('style') || '';
+        const match = /background-image\s*:\s*url\(['"]?([^'")]+)['"]?\)/i.exec(style);
+        if (match) {
+          try {
+            const resolved = new URL(match[1], location.href);
+            if (resolved.protocol === 'https:' && !/(logo|avatar|mascot|placeholder)/i.test(resolved.href)) return resolved.href;
+          } catch(e) {}
+        }
       }
     }
-    if (title.length >= 2 && title.length <= 180 && !generic.test(title)) add(title, a, 'anchor');
+    return '';
+  };
+  const meaningful = value => {
+    const text = clean(value);
+    return text.length >= 2 && text.length <= 180 && !generic.test(text);
+  };
+  const entries = [];
+  const entryByUrl = new Map();
+  const workAnchors = Array.from(document.querySelectorAll('a[href]')).filter(anchor => {
+    if (anchor.closest('nav,header,footer,[role="navigation"]')) return false;
+    const url = validLink(anchor);
+    if (!url) return false;
+    const path = url.pathname.toLowerCase();
+    return /\/manga\//.test(path) ||
+      (isCatalogue && anchor.querySelector('img') && !banned.has(path.split('/').filter(Boolean)[0] || ''));
+  });
+  for (const anchor of workAnchors) {
+    const url = validLink(anchor);
+    if (!url) continue;
+    const path = url.pathname.toLowerCase();
+    if (isReader && !/\/manga\//.test(path)) continue;
+    if (/^\/(r|capitulo|chapter|leitura|reader|read|episode|episodio)\//i.test(path)) continue;
+    if (banned.has(path.split('/').filter(Boolean)[0] || '')) continue;
+    const key = url.href.split('#')[0];
+    if (entryByUrl.has(key)) continue;
+    const card = cardFor(anchor);
+    const heading = card && card.querySelector('h1,h2,h3,h4,h5,h6,[class*="manga-title"],[class*="book-title"],[class*="series-title"],[class*="title"],[class*="titulo"],[class*="name"]');
+    const img = card && card.querySelector('img');
+    const title = [
+      heading && (heading.innerText || heading.textContent),
+      anchor.getAttribute('title'),
+      anchor.getAttribute('aria-label'),
+      img && img.getAttribute('alt'),
+      anchor.innerText || anchor.textContent
+    ].map(clean).find(meaningful) || '';
+    if (!meaningful(title)) continue;
+    const cover = chooseCover(anchor, card);
+    const cardText = clean(card && (card.innerText || card.textContent));
+    const descNode = card && card.querySelector('p,[class*="description"],[class*="summary"],[class*="synopsis"]');
+    const description = clean(descNode && (descNode.innerText || descNode.textContent)).slice(0,500);
+    const kind = ((/\b(MANHWA|MANHUA|MANGA|NOVEL)\b/i.exec(cardText) || [,''])[1] || '').toUpperCase();
+    const status = ((/\b(Em andamento|Hiato|Concluído|Concluido|Completo)\b/i.exec(cardText) || [,''])[1] || '');
+    const rating = ((/(?:^|\s)([0-5]\.\d)(?:\s|$)/.exec(cardText) || [,''])[1] || '');
+    const chapterCount = ((/Cap\.?\s*(\d+)|(\d+)\s*caps?/i.exec(cardText) || []).slice(1).find(Boolean) || '');
+    const genres = Array.from(card ? card.querySelectorAll('a[href]') : [])
+      .filter(a => /\/(genero|generos|genre|genres|categoria|categorias|tag)\//i.test((urlOf(a) || {}).pathname || ''))
+      .map(a => clean(a.innerText || a.textContent)).filter(Boolean);
+    const item = {title:title,url:key,image:cover,description:description,kind:kind,status:status,rating:rating,chapterCount:chapterCount,genres:genres,source:'work-card'};
+    entryByUrl.set(key,item);
+    entries.push(item);
   }
 
-  const headingNodes = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[class*=manga-title],[class*=book-title],[class*=series-title],[class*=titulo],[class*=name]'));
-  for (const h of headingNodes) {
-    const title = tidy(h.innerText || h.textContent);
-    if (title.length < 2 || title.length > 180 || generic.test(title)) continue;
-    let best = null;
-    const direct = h.closest('a[href]');
-    if (direct && allowedLink(direct)) best = direct;
-    let node = h;
-    for (let depth = 0; !best && depth < 6 && node; depth++, node = node.parentElement) {
-      const links = Array.from(node.querySelectorAll('a[href]')).filter(allowedLink);
-      if (links.length) {
-        best = links.find(a => /^(ver detalhes|detalhes|view details)$/i.test(tidy(a.innerText || a.textContent))) ||
-          links.find(a => !chapterLabel.test(tidy(a.innerText || a.textContent))) || links[0];
-      }
-      if (depth >= 2 && node.querySelectorAll('h1,h2,h3,h4,h5,h6').length > 4) break;
+  const chapters = [];
+  if (!isCatalogue && !isReader) {
+    const seenChapters = new Set();
+    for (const anchor of Array.from(document.querySelectorAll('a[href]'))) {
+      if (anchor.closest('nav,header,footer,[role="navigation"]')) continue;
+      const url = validLink(anchor);
+      if (!url) continue;
+      const path = url.pathname.toLowerCase();
+      const label = clean(anchor.innerText || anchor.textContent || anchor.getAttribute('title') || anchor.getAttribute('aria-label'));
+      const chapterRoute = /^\/r\//.test(path) || /\/(capitulo|chapter|leitura|reader|read|episode|episodio)\//.test(path) ||
+        /^(cap\.?|cap[ií]tulo|chapter|ep[ií]s[oó]dio|episode|p[aá]gina)\s*\d+/i.test(label);
+      if (!chapterRoute || !label || label.length > 220) continue;
+      const key = url.href.split('#')[0];
+      if (seenChapters.has(key)) continue;
+      seenChapters.add(key);
+      chapters.push({title:label,url:key,image:'',description:'',kind:'',status:'',rating:'',chapterCount:'',genres:[]});
     }
-    if (best) add(title, best, 'heading', h.parentElement);
   }
 
-  const path = (location.pathname + location.search).toLowerCase();
-  const isReader = /^\/r\//.test(location.pathname) || /(cap[ií]tulo|capitulo|chapter|leitura|reader|\/ler(?:\/|$)|\/read(?:\/|$)|epis[oó]dio|episode|p[aá]gina|page)/.test(path);
-  let readerImages = [];
+  const genres = [];
+  const genreSeen = new Set();
+  for (const anchor of Array.from(document.querySelectorAll('a[href]'))) {
+    const url = urlOf(anchor);
+    if (!sameSite(url)) continue;
+    const path = url.pathname.toLowerCase();
+    if (!/\/(genero|generos|genre|genres|categoria|categorias|tag)\//.test(path)) continue;
+    const title = clean(anchor.innerText || anchor.textContent || anchor.getAttribute('title'));
+    if (!title || title.length > 40 || genreSeen.has(url.href)) continue;
+    genreSeen.add(url.href);
+    genres.push({title:title,url:url.href});
+    if (genres.length >= 40) break;
+  }
+
+  const nextAnchor = document.querySelector('a[rel="next"],.pagination a.next,.nav-links a.next,a.page-numbers.next,a[aria-label*="Next"],a[aria-label*="Próxima"],.load-more a,a.load-more');
+  const nextPageUrl = nextAnchor && urlOf(nextAnchor) && sameSite(urlOf(nextAnchor)) ? urlOf(nextAnchor).href : '';
+  const readerImages = [];
   if (isReader) {
-    const imageNodes = Array.from(document.querySelectorAll(
-      '.reading-content img, .page-break img, .wp-manga-chapter-img, .chapter-content img, ' +
-      '.reader-area img, .chapter-images img, #readerarea img, .container-chapter-reader img, ' +
-      '#chapter_imgs img, .reading-detail img, .reader img, .comic-page img, .ts-main-image, ' +
-      '[class*=reader] img, [class*=chapter] img, [class*=page] img, img'
-    ));
-    readerImages = imageNodes.map(img => {
-      const cls = ((img.className || '') + ' ' + (img.id || '')).toLowerCase();
-      return {url:imageOf(img), cls:cls, w:Number(img.naturalWidth || img.getAttribute('width') || 0),
-        h:Number(img.naturalHeight || img.getAttribute('height') || 0)};
-    }).filter(x => x.url && (
-      /(chapter|page|reading|reader|comic|scan|manga-page)/.test(x.cls) ||
-      x.w >= 260 || x.h >= 360 ||
-      /(chapter|capitulo|manga-page|wp-content\/uploads|\/uploads\/)/i.test(x.url)
-    )).map(x => x.url).filter((u,i,a) => a.indexOf(u) === i).slice(0,120);
+    const selectors = '.reading-content img,.page-break img,.wp-manga-chapter-img,.chapter-content img,.reader-area img,.chapter-images img,#readerarea img,.container-chapter-reader img,#chapter_imgs img,.reading-detail img,.reader img,.comic-page img,.ts-main-image,[class*="reader"] img,[class*="chapter"] img,[class*="page"] img,img';
+    for (const img of Array.from(document.querySelectorAll(selectors))) {
+      const url = imageUrl(img);
+      if (!url) continue;
+      const classes = ((img.className || '') + ' ' + (img.id || '')).toLowerCase();
+      const width = Number(img.naturalWidth || img.getAttribute('width') || 0);
+      const height = Number(img.naturalHeight || img.getAttribute('height') || 0);
+      if (/(logo|avatar|icon|emoji|mascot|sprite|placeholder|banner)/i.test(classes + ' ' + url)) continue;
+      if (/(chapter|page|reading|reader|comic|scan|manga-page)/.test(classes) || width >= 260 || height >= 360 || /\/uploads\//i.test(url)) {
+        if (!readerImages.includes(url)) readerImages.push(url);
+      }
+      if (readerImages.length >= 150) break;
+    }
   }
-  const h1 = document.querySelector('h1');
-  const title = tidy(h1 && (h1.innerText || h1.textContent)) || tidy(document.title) || 'Nexus Toons';
+
+  const bodyText = clean(document.body && document.body.innerText);
+  const metaImage = document.querySelector('meta[property="og:image"]');
+  const coverUrl = metaImage && /^https:\/\//i.test(metaImage.content) ? metaImage.content : '';
+  const synopsisNode = document.querySelector('.manga-summary,.summary__content,.description-summary,.entry-content,.manga-description,[class*="synopsis"],[class*="description"]');
+  const synopsis = clean(synopsisNode && (synopsisNode.innerText || synopsisNode.textContent)).slice(0,5000);
+  const authorMatch = /Autor\s*:?\s*([^\n]{2,100})/i.exec(bodyText);
+  const status = ((/\b(Em andamento|Hiato|Concluído|Concluido|Completo)\b/i.exec(bodyText) || [,''])[1] || '');
+  const kind = ((/\b(Manhwa|Manhua|Manga|Novel)\b/i.exec(bodyText) || [,''])[1] || '');
+  const rating = ((/(?:^|\s)([0-5]\.\d)(?:\s|$)/.exec(bodyText) || [,''])[1] || '');
+  const chapterCount = ((/Capítulos?\s*\((\d+)\)|(\d+)\s*caps?/i.exec(bodyText) || []).slice(1).find(Boolean) || '');
+  const titleNode = document.querySelector('h1');
+  const title = clean(titleNode && (titleNode.innerText || titleNode.textContent)) || clean(document.title) || 'Nexus Toons';
+
   return JSON.stringify({
     title:title,
-    entries:entries.slice(0,300),
+    entries:isCatalogue ? entries.slice(0,500) : [],
+    chapters:chapters.slice(0,600),
+    genres:genres,
     readerImages:readerImages,
-    debug:'DOM: ' + allAnchors.length + ' links; ' + sameSiteAnchors.length + ' links internos; ' + cards.length + ' cartões; ' + headingNodes.length + ' cabeçalhos.'
+    nextPageUrl:nextPageUrl,
+    coverUrl:coverUrl,
+    synopsis:synopsis,
+    author:authorMatch ? clean(authorMatch[1]) : '',
+    status:status,
+    kind:kind,
+    rating:rating,
+    chapterCount:chapterCount,
+    debug:'DOM: ' + document.querySelectorAll('a[href]').length + ' links; ' + workAnchors.length + ' candidatas a obras; ' + entries.length + ' títulos; ' + chapters.length + ' capítulos.'
   });
 })();
 """
