@@ -904,41 +904,65 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     return fallback || anchor.closest('article,li,.swiper-slide,.page-item-detail,.c-tabs-item__content,.bsx,.utao,.manga-item,.manga-card,.series-item,.book-item,.item,[class*="card"]');
   };
   const chooseCover = (anchor, card) => {
+    const candidates = [];
+    const addCandidate = (raw, score, label) => {
+      if (!raw) return;
+      const parts = String(raw).split(',').map(part => clean(part).split(/\\s+/)[0]).filter(Boolean);
+      for (const part of parts) {
+        if (!part || part.startsWith('data:image') || /^(about:blank|javascript:|#)$/i.test(part)) continue;
+        try {
+          const url = new URL(part, location.href);
+          if (url.protocol !== 'https:') continue;
+          if (/(logo|avatar|favicon|emoji|sprite|mascot|placeholder|profile|banner-ad|blank\\.(gif|png|jpg)|transparent\\.(gif|png))/i.test(url.href)) continue;
+          candidates.push({url:url.href, score:score, label:label || ''});
+        } catch(e) {}
+      }
+    };
     const images = [];
+    if (anchor && anchor.matches && anchor.matches('img')) images.push(anchor);
     if (anchor && anchor.querySelectorAll) images.push(...Array.from(anchor.querySelectorAll('img')));
+    if (card && card.matches && card.matches('img')) images.push(card);
     if (card && card.querySelectorAll) images.push(...Array.from(card.querySelectorAll('img')));
-    const unique = Array.from(new Set(images));
-    const ranked = unique.map(img => {
-      const url = imageUrl(img);
-      if (!url) return {url:'', score:-1000};
+    for (const img of Array.from(new Set(images))) {
       const classes = ((img.className || '') + ' ' + (img.id || '')).toLowerCase();
       const alt = clean(img.getAttribute('alt'));
       let score = 0;
-      if (/(cover|thumb|thumbnail|poster|manga|manhwa|manhua|book|wp-post-image|attachment)/.test(classes)) score += 45;
-      if (alt.length > 2 && !generic.test(alt)) score += 12;
-      if (Number(img.getAttribute('width') || img.naturalWidth || 0) >= 100) score += 10;
-      if (Number(img.getAttribute('height') || img.naturalHeight || 0) >= 150) score += 10;
-      if (/wp-content\/uploads|\/uploads\//i.test(url)) score += 6;
-      if (/(avatar|profile|logo|icon|mascot|sprite|emoji|placeholder|banner)/i.test(classes + ' ' + url)) score -= 100;
-      if (anchor && anchor.contains(img)) score += 8;
-      return {url:url,score:score};
-    }).filter(item => item.url).sort((a,b) => b.score-a.score);
-    if (ranked.length) return ranked[0].url;
-    if (card) {
-      const bgNodes = [card, ...Array.from(card.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background]'))];
+      if (/(cover|thumb|thumbnail|poster|manga|manhwa|manhua|book|wp-post-image|attachment)/.test(classes)) score += 35;
+      if (alt.length > 2 && !generic.test(alt)) score += 10;
+      if (Number(img.getAttribute('width') || img.naturalWidth || 0) >= 100) score += 8;
+      if (Number(img.getAttribute('height') || img.naturalHeight || 0) >= 150) score += 8;
+      if (img.closest('a') && anchor && img.closest('a') === anchor) score += 10;
+      const imageAttrs = ['data-src','data-lazy-src','data-original','data-lazyload','data-image','data-cfsrc','data-echo','data-url','data-image-src','data-original-src','data-lazy','data-flickity-lazyload','srcset','data-srcset','data-lazy-srcset','src'];
+      for (const attr of imageAttrs) addCandidate(img.getAttribute(attr), score + (attr.startsWith('data-') ? 12 : 0), attr);
+      addCandidate(img.currentSrc, score + 5, 'currentSrc');
+    }
+    const nodes = [];
+    if (anchor) nodes.push(anchor);
+    if (card) nodes.push(card);
+    for (const root of nodes) {
+      if (!root || !root.querySelectorAll) continue;
+      for (const source of root.querySelectorAll('picture source')) {
+        addCandidate(source.getAttribute('data-srcset'), 42, 'picture data-srcset');
+        addCandidate(source.getAttribute('srcset'), 35, 'picture srcset');
+        addCandidate(source.getAttribute('data-src'), 42, 'picture data-src');
+      }
+      const bgNodes = [root, ...Array.from(root.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background],[data-bg-src]'))];
       for (const node of bgNodes) {
         const style = node.getAttribute('style') || '';
-        const match = /background-image\s*:\s*url\((?:['"])?([^'")]+)(?:['"])?\)/i.exec(style);
-        const raw = match ? match[1] : (node.getAttribute('data-background') || node.getAttribute('data-bg') || node.getAttribute('data-lazy-background') || '');
-        if (raw) {
-          try {
-            const resolved = new URL(raw, location.href);
-            if (resolved.protocol === 'https:' && !/(logo|avatar|mascot|placeholder|sprite|banner)/i.test(resolved.href)) return resolved.href;
-          } catch(e) {}
+        const match = /background(?:-image)?\\s*:\\s*url\\((?:['"])?([^'")]+)(?:['"])?\\)/i.exec(style);
+        addCandidate(match ? match[1] : '', 38, 'css background');
+        for (const attr of ['data-background','data-bg','data-lazy-background','data-bg-src']) {
+          addCandidate(node.getAttribute(attr), 42, attr);
         }
       }
     }
-    return '';
+    const unique = new Map();
+    for (const item of candidates) {
+      const old = unique.get(item.url);
+      if (!old || item.score > old.score) unique.set(item.url, item);
+    }
+    const ranked = Array.from(unique.values()).sort((a,b) => b.score-a.score);
+    return ranked.length ? ranked[0].url : '';
   };
   const meaningful = value => {
     const text = clean(value);
