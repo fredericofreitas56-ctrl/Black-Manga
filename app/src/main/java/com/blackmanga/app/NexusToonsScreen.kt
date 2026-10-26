@@ -66,24 +66,23 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             domFallbackMessage = ""
             currentUrl = url
             try {
-                val directResult = try {
-                    Result.success(NexusToonsAdapter.load(url))
-                } catch (exception: Exception) {
-                    Result.failure(exception)
+                val directPage: NexusPage? = try {
+                    NexusToonsAdapter.load(url)
+                } catch (_: Exception) {
+                    null
                 }
-                val directPage = directResult.getOrNull()
                 val shouldTryUniversal = directPage == null ||
                     (directPage.entries.isEmpty() && directPage.readerImages.isEmpty())
-                val universalPage = if (shouldTryUniversal) {
+                val universalPage: UniversalSitePage? = if (shouldTryUniversal) {
                     try {
-                        Result.success(withContext(Dispatchers.IO) { UniversalSiteAdapter.load(url) }).getOrNull()
+                        withContext(Dispatchers.IO) { UniversalSiteAdapter.load(url) }
                     } catch (_: Exception) {
                         null
                     }
                 } else null
 
                 if (directPage == null && universalPage == null) {
-                    throw directResult.exceptionOrNull() ?: IllegalStateException("O Nexus Toons não devolveu conteúdo reconhecível.")
+                    throw IllegalStateException("Não foi possível carregar o catálogo Nexus Toons. Verifica a ligação ou tenta abrir o site diretamente.")
                 }
 
                 val mergedEntries = (
@@ -302,6 +301,11 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                         }
                                     }.distinct().take(100)
 
+                                    if (extracted.isEmpty() && extractedImages.isEmpty() && extractionAttempts < 6) {
+                                        web.postDelayed({ extractDomWhenReady() }, 1200L)
+                                        return@evaluateJavascript
+                                    }
+
                                     val currentPage = page
                                     val fallbackTitle = data.optString("title", "Nexus Toons")
                                         .ifBlank { "Nexus Toons" }
@@ -326,7 +330,6 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             " A página permanece visível para navegação; a extração nativa pode precisar de mais seletores."
                                     } else ""
                                     }
-                                }
                                 }
                                 web.postDelayed({ extractDomWhenReady() }, 1200L)
                             }
@@ -362,7 +365,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
 private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
 (function() {
   const hostAllowed = host => {
-    const h = String(host || '').toLowerCase().replace(/^www\\./, '');
+    const h = String(host || '').toLowerCase().replace(/^www\./, '');
     return h === 'nexustoons.com' || h.endsWith('.nexustoons.com');
   };
   const generic = /^(ver detalhes|detalhes|ler agora|ler|abrir|ver mais|saiba mais|continuar lendo|read more|view more|view details|home|in[ií]cio|menu|pesquisar|buscar)$/i;
@@ -370,7 +373,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
   const banned = new Set(['categoria','categorias','category','categories','genero','generos','genre','genres','tag','tags','search','pesquisa','pesquisar','busca','login','logout','register','registrar','u','user','users','perfil','profile','conta','account','sobre','contato','contact','politica','termos','ranking','notificacoes','notifications']);
   const entries = [];
   const seen = new Set();
-  const tidy = s => String(s || '').replace(/\\s+/g, ' ').trim();
+  const tidy = s => String(s || '').replace(/\s+/g, ' ').trim();
   const urlOf = a => {
     try { return new URL(a.href || a.getAttribute('href') || '', location.href); }
     catch(e) { return null; }
@@ -389,13 +392,13 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
       img.getAttribute('data-src'), img.getAttribute('data-lazy-src'),
       img.getAttribute('data-original'), img.getAttribute('data-url'),
       img.getAttribute('data-lazyload'), img.currentSrc, img.src,
-      (img.getAttribute('srcset') || '').split(',').pop().trim().split(/\\s+/)[0]
+      (img.getAttribute('srcset') || '').split(',').pop().trim().split(/\s+/)[0]
     ];
     for (const candidate of candidates) {
       if (!candidate || candidate.startsWith('data:image')) continue;
       try {
         const u = new URL(candidate, location.href);
-        if (u.protocol === 'https:' && hostAllowed(u.hostname) === false || u.protocol === 'https:') return u.href;
+        if (u.protocol === 'https:') return u.href;
       } catch(e) {}
     }
     return '';
@@ -421,7 +424,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     }
     entries.push({title:title, url:key, image:image, description:description.slice(0,300), source:source || 'link'});
   };
-  const chapterLabel = /^(cap\\.?|cap[ií]tulo|chapter|ep[ií]s[oó]dio|episode|p[aá]gina)\\s*\\d*/i;
+  const chapterLabel = /^(cap\.?|cap[ií]tulo|chapter|ep[ií]s[oó]dio|episode|p[aá]gina)\s*\d*/i;
   const cardSelector = [
     'article', 'li', '[class*=manga-card]', '[class*=obra-card]', '[class*=work-card]',
     '[class*=series-card]', '[class*=comic-card]', '[class*=manga-item]', '[class*=obra-item]',
@@ -481,7 +484,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
   }
 
   const path = (location.pathname + location.search).toLowerCase();
-  const isReader = /(cap[ií]tulo|capitulo|chapter|leitura|reader|\\/ler(?:\\/|$)|\\/read(?:\\/|$)|epis[oó]dio|episode|p[aá]gina|page)/.test(path);
+  const isReader = /(cap[ií]tulo|capitulo|chapter|leitura|reader|\/ler(?:\/|$)|\/read(?:\/|$)|epis[oó]dio|episode|p[aá]gina|page)/.test(path);
   let readerImages = [];
   if (isReader) {
     const imageNodes = Array.from(document.querySelectorAll(
