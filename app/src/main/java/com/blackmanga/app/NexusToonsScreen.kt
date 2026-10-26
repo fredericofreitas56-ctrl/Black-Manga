@@ -501,7 +501,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
   }
 
   const path = (location.pathname + location.search).toLowerCase();
-  const isReader = /(cap[ií]tulo|capitulo|chapter|leitura|reader|\/ler(?:\/|$)|\/read(?:\/|$)|epis[oó]dio|episode|p[aá]gina|page)/.test(path);
+  const isReader = /^\/r\//.test(location.pathname) || /(cap[ií]tulo|capitulo|chapter|leitura|reader|\/ler(?:\/|$)|\/read(?:\/|$)|epis[oó]dio|episode|p[aá]gina|page)/.test(path);
   let readerImages = [];
   if (isReader) {
     const imageNodes = Array.from(document.querySelectorAll(

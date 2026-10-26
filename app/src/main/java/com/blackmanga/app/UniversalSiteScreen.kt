@@ -235,7 +235,7 @@ internal object UniversalSiteAdapter {
             .take(250)
 
         val path = finalUri.path.orEmpty().lowercase()
-        val pathLooksLikeReader = listOf("chapter", "capitulo", "capítulo", "reading", "reader", "read", "leitura", "episode", "episodio", "episódio", "pagina", "page")
+        val pathLooksLikeReader = path.startsWith("/r/") || listOf("chapter", "capitulo", "capítulo", "reading", "reader", "read", "leitura", "episode", "episodio", "episódio", "pagina", "page")
             .any { path.contains(it) } ||
             (baseHost.contains("vegitoons.black") && Regex("/capitulo/\\d+").containsMatchIn(finalUri.path.orEmpty()))
 
@@ -600,7 +600,7 @@ private const val UNIVERSAL_DOM_EXTRACTION_SCRIPT = """
       }
     } catch(e) {}
   }
-  const readerLike = /(chapter|capitulo|capítulo|reading|reader|read|leitura|episode|episodio|episódio|pagina|page)/.test(path)
+  const readerLike = /^\/r\//.test(location.pathname) || /(chapter|capitulo|capítulo|reading|reader|read|leitura|episode|episodio|episódio|pagina|page)/.test(path)
     || explicitReaderImages.length >= 2;
   const readerImages = explicitReaderImages.slice(0,120);
   if (readerLike) {

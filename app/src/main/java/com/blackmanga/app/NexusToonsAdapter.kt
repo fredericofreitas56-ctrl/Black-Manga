@@ -143,7 +143,8 @@ internal object NexusToonsAdapter {
             .take(300)
 
         val pathLower = uri.path.orEmpty().lowercase()
-        val readerLike = pathLower.contains("cap") || pathLower.contains("chapter") ||
+        val opaqueReaderRoute = pathLower.startsWith("/r/")
+        val readerLike = opaqueReaderRoute || pathLower.contains("cap") || pathLower.contains("chapter") ||
             pathLower.contains("leitura") || pathLower.contains("ler") ||
             pathLower.contains("read") || pathLower.contains("episodio") ||
             pathLower.contains("episode")
@@ -156,7 +157,10 @@ internal object NexusToonsAdapter {
                         classes.contains("chapter") || classes.contains("page") ||
                             classes.contains("reading") || classes.contains("wp-manga") ||
                             classes.contains("manga-page") ||
-                            img.attr("width").toIntOrNull()?.let { it > 250 } == true
+                            img.attr("width").toIntOrNull()?.let { it > 250 } == true ||
+                            (opaqueReaderRoute && img.parents().none { parent ->
+                                parent.normalName() in setOf("header", "nav", "footer", "aside")
+                            })
                         )
                 }
                 .mapNotNull { absoluteImage(it) }

@@ -204,7 +204,7 @@ private fun BlackMangaApp() {
                 Text("BM", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
             when (selectedTab) {
-                0 -> HomeScreen(onGoToSites = { selectedTab = 2 }, onGoToTranslate = { selectedTab = 3 }, onOpenMangaDex = { activeMangaDexUrl = "https://mangadex.org/" }, onOpenNexusToons = { activeNexusUrl = "https://nexustoons.com/" })
+                0 -> HomeScreen(onGoToSites = { selectedTab = 2 }, onGoToTranslate = { selectedTab = 3 }, onOpenMangaDex = { activeMangaDexUrl = "https://mangadex.org/" }, onOpenNexusToons = { activeNexusUrl = "https://nexustoons.com/biblioteca" })
                 1 -> LibraryScreen(
                     items = savedManga,
                     onOpen = { activeUniversalUrl = it },
@@ -411,7 +411,7 @@ private fun SourcesScreen(
         Button(onClick = { onOpenCatalog("https://mangadex.org/") }, modifier = Modifier.fillMaxWidth()) {
             Text("Abrir catálogo MangaDex integrado")
         }
-        Button(onClick = { onOpenCatalog("https://nexustoons.com/") }, modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = { onOpenCatalog("https://nexustoons.com/biblioteca") }, modifier = Modifier.fillMaxWidth()) {
             Text("Abrir catálogo Nexus Toons integrado")
         }
         OutlinedTextField(
