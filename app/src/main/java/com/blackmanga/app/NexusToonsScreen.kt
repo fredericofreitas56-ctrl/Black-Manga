@@ -86,6 +86,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     var error by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf("Todos") }
+    var fallbackGenre by remember { mutableStateOf("Todos") }
     var selectedWork by remember { mutableStateOf<NexusEntry?>(null) }
     var selectedChapterUrl by remember { mutableStateOf<String?>(null) }
     var selectedChapterTitle by remember { mutableStateOf("") }
@@ -114,6 +115,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             error = ""
             filter = ""
             typeFilter = "Todos"
+            fallbackGenre = "Todos"
             page = null
             selectedChapterUrl = null
             selectedChapterTitle = ""
@@ -490,22 +492,43 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                             }
                         }
                     } else {
+                        val commonGenres = listOf(
+                            "Todos", "Ação", "Aventura", "Artes marciais", "Comédia",
+                            "Drama", "Fantasia", "Mistério", "Romance", "Sistema"
+                        )
                         Row(
                             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
                             horizontalArrangement = Arrangement.spacedBy(7.dp)
                         ) {
-                            listOf("Todos", "Manhwa", "Manhua", "Manga", "Novel").forEach { kind ->
+                            commonGenres.forEach { genre ->
                                 FilterChip(
-                                    selected = typeFilter == kind,
-                                    onClick = { typeFilter = kind },
-                                    label = { Text(kind, color = ink) }
+                                    selected = fallbackGenre == genre,
+                                    onClick = { fallbackGenre = genre },
+                                    label = { Text(genre, color = ink) }
                                 )
                             }
                         }
                     }
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        listOf("Todos", "Manhwa", "Manhua", "Manga", "Novel").forEach { kind ->
+                            FilterChip(
+                                selected = typeFilter == kind,
+                                onClick = { typeFilter = kind },
+                                label = { Text(kind, color = ink) }
+                            )
+                        }
+                    }
 
                     val bySearch = loaded.entries.filter { it.title.contains(filter.trim(), true) }
-                    val visibleEntries = if (typeFilter == "Todos") bySearch else bySearch.filter {
+                    val byGenre = if (loaded.genres.isNotEmpty() || fallbackGenre == "Todos") bySearch else bySearch.filter { entry ->
+                        entry.genres.any { it.contains(fallbackGenre, true) } ||
+                            entry.title.contains(fallbackGenre, true) ||
+                            entry.description.contains(fallbackGenre, true)
+                    }
+                    val visibleEntries = if (typeFilter == "Todos") byGenre else byGenre.filter {
                         it.kind.equals(typeFilter, ignoreCase = true)
                     }
                     val imageCounts = visibleEntries.mapNotNull { it.imageUrl }.groupingBy { it }.eachCount()
