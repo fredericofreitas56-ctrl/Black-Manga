@@ -249,9 +249,17 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         tag = currentUrl
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
+                        settings.databaseEnabled = true
+                        settings.loadsImagesAutomatically = true
+                        settings.blockNetworkImage = false
+                        settings.javaScriptCanOpenWindowsAutomatically = true
+                        settings.setSupportMultipleWindows(false)
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
-                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                        // Nexus Toons renders its catalogue with client-side JavaScript. Use a current
+                        // Android Chrome user agent so the site does not serve an empty/unsupported view.
+                        settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
                         webViewClient = object : WebViewClient() {
                             @Suppress("DEPRECATION")
                             override fun onReceivedError(
@@ -269,6 +277,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 val web = view ?: return
                                 val finishedUrl = url ?: return
                                 if (!NexusToonsAdapter.supports(finishedUrl)) return
+                                // Wait for the JavaScript catalogue to render before inspecting the DOM.
                                 // The page can populate its catalogue asynchronously; retry DOM extraction before giving up.
                                 var extractionAttempts = 0
                                 fun extractDomWhenReady() {
