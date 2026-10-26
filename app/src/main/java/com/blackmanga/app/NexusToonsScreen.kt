@@ -983,7 +983,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     for (let depth = 0; depth < 9 && node; depth++, node = node.parentElement) {
       const descendantLinks = node.querySelectorAll ? node.querySelectorAll('a[href]').length : 0;
       const workLinks = descendantLinks + (node.matches && node.matches('a[href]') ? 1 : 0);
-      const imageSelector = 'img, picture source, [data-src], [data-lazy-src], [data-original], [data-lazy-srcset], [data-srcset], [data-image], [data-background], [data-bg], [data-lazy-background], [style*="background-image"]';
+      const imageSelector = 'img, picture source, [data-src], [data-lazy-src], [data-original], [data-lazy-srcset], [data-srcset], [data-image], [data-cover], [data-thumb], [data-poster], [data-image-url], [data-thumbnail], [data-lazy-image], [data-background], [data-bg], [data-lazy-background], [style*="background-image"]';
       const images = node.querySelectorAll ? node.querySelectorAll(imageSelector).length : 0;
       const selfHasArtwork = node.matches && node.matches(imageSelector);
       const backgrounds = node.querySelectorAll ? node.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background]').length : 0;
@@ -1020,51 +1020,78 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
         if (!part || part.startsWith('data:image') || /^(about:blank|javascript:|#)$/i.test(part)) continue;
         try {
           const url = new URL(part, location.href);
+          // Alguns cartões publicam imagens com URL http://; o Chrome atualiza
+          // esses pedidos para HTTPS em páginas seguras. Fazemos o mesmo aqui.
+          if (url.protocol === 'http:') url.protocol = 'https:';
           if (url.protocol !== 'https:') continue;
           if (/(logo|avatar|favicon|emoji|sprite|mascot|placeholder|profile|banner-ad|blank\.(gif|png|jpg)|transparent\.(gif|png))/i.test(url.href)) continue;
           candidates.push({url:url.href, score:score, label:label || ''});
         } catch(e) {}
       }
     };
-    const images = [];
-    if (anchor && anchor.matches && anchor.matches('img')) images.push(anchor);
-    if (anchor && anchor.querySelectorAll) images.push(...Array.from(anchor.querySelectorAll('img')));
-    if (card && card.matches && card.matches('img')) images.push(card);
-    if (card && card.querySelectorAll) images.push(...Array.from(card.querySelectorAll('img')));
-    for (const img of Array.from(new Set(images))) {
+    const roots = [];
+    if (anchor) roots.push(anchor);
+    if (card && card !== anchor) roots.push(card);
+    const allImgs = [];
+    for (const root of roots) {
+      if (root.matches && root.matches('img')) allImgs.push(root);
+      if (root.querySelectorAll) allImgs.push(...Array.from(root.querySelectorAll('img')));
+    }
+    for (const img of Array.from(new Set(allImgs))) {
       const classes = ((img.className || '') + ' ' + (img.id || '')).toLowerCase();
       const alt = clean(img.getAttribute('alt'));
-      let score = 0;
-      if (/(cover|thumb|thumbnail|poster|manga|manhwa|manhua|book|wp-post-image|attachment)/.test(classes)) score += 35;
+      let score = 15;
+      if (/(cover|thumb|thumbnail|poster|manga|manhwa|manhua|book|wp-post-image|attachment|image)/.test(classes)) score += 35;
       if (alt.length > 2 && !generic.test(alt)) score += 10;
       if (Number(img.getAttribute('width') || img.naturalWidth || 0) >= 100) score += 8;
       if (Number(img.getAttribute('height') || img.naturalHeight || 0) >= 150) score += 8;
       if (img.closest('a') && anchor && img.closest('a') === anchor) score += 10;
-      const imageAttrs = ['data-src','data-lazy-src','data-original','data-lazyload','data-image','data-cfsrc','data-echo','data-url','data-image-src','data-original-src','data-lazy','data-flickity-lazyload','srcset','data-srcset','data-lazy-srcset','src'];
-      for (const attr of imageAttrs) addCandidate(img.getAttribute(attr), score + (attr.startsWith('data-') ? 12 : 0), attr);
-      addCandidate(img.currentSrc, score + 5, 'currentSrc');
-    }
-    const nodes = [];
-    if (anchor) nodes.push(anchor);
-    if (card) nodes.push(card);
-    for (const root of nodes) {
-      if (!root || !root.querySelectorAll) continue;
-      for (const source of root.querySelectorAll('picture source')) {
-        addCandidate(source.getAttribute('data-srcset'), 42, 'picture data-srcset');
-        addCandidate(source.getAttribute('srcset'), 35, 'picture srcset');
-        addCandidate(source.getAttribute('data-src'), 42, 'picture data-src');
+      for (const attr of ['data-cover','data-thumb','data-poster','data-image-url','data-thumbnail','data-lazy-image','data-original-image','data-src','data-lazy-src','data-original','data-lazyload','data-image','data-cfsrc','data-echo','data-url','data-image-src','data-original-src','data-lazy','data-flickity-lazyload','data-srcset','data-lazy-srcset','srcset','src']) {
+        const raw = img.getAttribute(attr);
+        addCandidate(raw, score + (attr.startsWith('data-') ? 12 : 0), attr);
       }
-      const bgNodes = [root, ...Array.from(root.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background],[data-bg-src],[class*="cover"],[class*="thumb"],[class*="poster"],[class*="image"]'))];
-      for (const node of bgNodes) {
-        const style = node.getAttribute('style') || '';
-        const match = /background(?:-image)?\s*:\s*url\((?:['"])?([^'")]+)(?:['"])?\)/i.exec(style);
-        addCandidate(match ? match[1] : '', 38, 'inline css background');
-        let computedBackground = '';
-        try { computedBackground = window.getComputedStyle(node).backgroundImage || ''; } catch(e) {}
-        const computedMatch = /url\((['"]?)(.*?)['"]?\)/i.exec(computedBackground);
-        if (computedMatch) addCandidate(computedMatch[2], 44, 'computed css background');
-        for (const attr of ['data-background','data-bg','data-lazy-background','data-bg-src']) {
-          addCandidate(node.getAttribute(attr), 42, attr);
+      addCandidate(img.currentSrc, score + 6, 'currentSrc');
+    }
+
+    // Não limitar a extração a classes CSS conhecidas: alguns cartões definem a
+    // capa através de data-cover/data-src ou de background em folhas de estilo.
+    const dataAttrs = ['data-cover','data-thumb','data-poster','data-image-url','data-thumbnail','data-lazy-image','data-original-image','data-background','data-bg','data-lazy-background','data-bg-src'];
+    const lazyAttrs = ['data-src','data-lazy-src','data-original','data-lazyload','data-image','data-cfsrc','data-echo','data-url','data-image-src','data-original-src','data-lazy','data-flickity-lazyload'];
+    const visited = new Set();
+    for (const root of roots) {
+      if (!root || !root.querySelectorAll) continue;
+      const nodes = [root, ...Array.from(root.querySelectorAll('*')).slice(0, 180)];
+      for (const node of nodes) {
+        if (visited.has(node)) continue;
+        visited.add(node);
+        const classes = ((node.className && String(node.className)) || '') + ' ' + (node.id || '');
+        const lowerClasses = classes.toLowerCase();
+        const looksLikeArtwork = /(cover|thumb|thumbnail|poster|manga|manhwa|manhua|book|image|media|artwork|capa)/i.test(lowerClasses);
+        for (const attr of dataAttrs) {
+          const raw = node.getAttribute && node.getAttribute(attr);
+          if (raw) addCandidate(raw, 48, attr);
+        }
+        if (looksLikeArtwork) {
+          for (const attr of lazyAttrs) {
+            const raw = node.getAttribute && node.getAttribute(attr);
+            if (raw) addCandidate(raw, 32, attr);
+          }
+        }
+        if (node.matches && node.matches('picture source')) {
+          addCandidate(node.getAttribute('srcset'), 36, 'picture srcset');
+          addCandidate(node.getAttribute('data-srcset'), 48, 'picture data-srcset');
+          addCandidate(node.getAttribute('data-src'), 48, 'picture data-src');
+        }
+        let background = '';
+        try { background = window.getComputedStyle(node).backgroundImage || ''; } catch(e) {}
+        const bgMatch = /url\((['"]?)(.*?)['"]?\)/i.exec(background);
+        if (bgMatch) addCandidate(bgMatch[2], looksLikeArtwork ? 60 : 22, 'computed background');
+        for (const pseudo of ['::before','::after']) {
+          try {
+            const pseudoBackground = window.getComputedStyle(node, pseudo).backgroundImage || '';
+            const pseudoMatch = /url\((['"]?)(.*?)['"]?\)/i.exec(pseudoBackground);
+            if (pseudoMatch) addCandidate(pseudoMatch[2], looksLikeArtwork ? 55 : 18, 'pseudo background');
+          } catch(e) {}
         }
       }
     }
@@ -1089,7 +1116,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     const path = url.pathname.toLowerCase();
     const firstSegment = path.split('/').filter(Boolean)[0] || '';
     const card = cardFor(anchor);
-    const hasCardImage = !!(card && card.querySelector('img, [style*="background-image"]'));
+    const hasCardImage = !!(card && card.querySelector('img, [style*="background-image"], [data-cover], [data-thumb], [data-poster], [data-image-url], [data-thumbnail], [data-lazy-image], [data-background], [data-bg]'));
     const hasDescriptiveText = meaningful(anchor.innerText || anchor.textContent || anchor.getAttribute('title') || anchor.getAttribute('aria-label'));
     return /\/(manga|obra|series|comic|manhwa|manhua)\//.test(path) ||
       (isCatalogue && !banned.has(firstSegment) && (anchor.querySelector('img') || hasCardImage) && hasDescriptiveText);
@@ -1215,7 +1242,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     kind:kind,
     rating:rating,
     chapterCount:chapterCount,
-    debug:'DOM: ' + document.querySelectorAll('a[href]').length + ' links; ' + workAnchors.length + ' candidatas a obras; ' + entries.length + ' títulos; ' + chapters.length + ' capítulos.'
+    debug:'DIAGNÓSTICO CAPAS: ' + entries.filter(item => item.image).length + '/' + entries.length + ' capas extraídas; ' + document.querySelectorAll('img').length + ' elementos img; ' + document.querySelectorAll('img[data-src],img[data-lazy-src],img[data-original],img[data-srcset],img[data-image],img[data-cfsrc],img[data-lazy]').length + ' imagens com atributos lazy; ' + document.querySelectorAll('[data-cover],[data-thumb],[data-poster],[data-image-url],[data-thumbnail],[data-background],[data-bg]').length + ' elementos com atributos de capa; ' + workAnchors.length + ' candidatos e ' + document.querySelectorAll('a[href]').length + ' links.'
   });
 })();
 """
