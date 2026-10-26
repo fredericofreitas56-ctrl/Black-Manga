@@ -447,7 +447,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
   // Do not exclude /obras or /novels: a source can use these as valid title routes.
   const banned = new Set(['categoria','categorias','category','categories','genero','generos','genre','genres','tag','tags','search','pesquisa','pesquisar','busca','login','logout','register','registrar','u','user','users','perfil','profile','conta','account','sobre','contato','contact','politica','termos','ranking','notificacoes','notifications','loja','biblioteca','niveis','conquistas','comunidade','comunidades']);
   const catalogueRoutes = new Set(['/','/biblioteca','/loja','/catalogo','/explorar','/niveis','/níveis','/conquistas','/comunidade','/comunidades']);
-  const currentPath = (location.pathname || '/').replace(/\\/$/, '').toLowerCase() || '/';
+  const currentPath = (location.pathname || '/').replace(/\/$/, '').toLowerCase() || '/';
   const entries = [];
   const seen = new Set();
   const tidy = s => String(s || '').replace(/\s+/g, ' ').trim();
@@ -461,7 +461,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     if (!u || u.protocol !== 'https:' || !hostAllowed(u.hostname)) return false;
     const parts = u.pathname.split('/').filter(Boolean);
     if (!parts.length || banned.has(parts[0].toLowerCase())) return false;
-    const targetPath = (u.pathname || '/').replace(/\\/$/, '').toLowerCase() || '/';
+    const targetPath = (u.pathname || '/').replace(/\/$/, '').toLowerCase() || '/';
     if (catalogueRoutes.has(currentPath) && parts[0].toLowerCase() !== 'manga') return false;
     // On a work-detail page, skip links to other works but keep chapter paths and /r/ routes.
     if (currentPath.startsWith('/manga/') && parts[0].toLowerCase() === 'manga' && parts.length <= 2) return false;
