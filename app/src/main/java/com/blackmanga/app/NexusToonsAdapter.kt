@@ -102,6 +102,32 @@ internal object NexusToonsAdapter {
         )
     } catch (_: Exception) { false }
 
+    fun guessedNextPageUrl(rawUrl: String): String? = try {
+        val uri = URI(rawUrl.trim())
+        if (!supports(rawUrl) || !isCatalogueUrl(rawUrl)) return null
+        val path = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }
+        val query = uri.rawQuery.orEmpty()
+        val queryPage = Regex("([?&](?:paged|page)=)(\\d+)", RegexOption.IGNORE_CASE).find(rawUrl)
+        if (queryPage != null) {
+            val nextQuery = queryPage.groupValues[1] + (queryPage.groupValues[2].toIntOrNull()?.plus(1) ?: 2)
+            return rawUrl.replaceRange(queryPage.range, nextQuery)
+        }
+        val pagePath = Regex("^(.*?)/(?:page|pagina)/(\\d+)$", RegexOption.IGNORE_CASE).find(path)
+        if (pagePath != null) {
+            val next = (pagePath.groupValues[2].toIntOrNull() ?: 1) + 1
+            val prefix = pagePath.groupValues[1].ifBlank { "" }
+            return uri.scheme + "://" + uri.rawAuthority + prefix + "/page/" + next + "/"
+        }
+        if (path == "/") return uri.scheme + "://" + uri.rawAuthority + "/page/2/"
+        if (path.startsWith("/genero/") || path.startsWith("/generos/") ||
+            path.startsWith("/genre/") || path.startsWith("/genres/") ||
+            path.startsWith("/categoria/") || path.startsWith("/categorias/") ||
+            path.startsWith("/tag/")) {
+            return uri.scheme + "://" + uri.rawAuthority + path + "/page/2/"
+        }
+        null
+    } catch (_: Exception) { null }
+
     suspend fun load(rawUrl: String): NexusPage = withContext(Dispatchers.IO) {
         val uri = URI(rawUrl.trim())
         require(uri.scheme.equals("https", true) && supports(rawUrl)) {
