@@ -112,8 +112,14 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     domFallbackLoading = true
                 }
             } catch (e: Exception) {
-                // The site might serve content only to a browser/WebView.
+                // If both HTML adapters fail, still render the actual site instead of leaving a blank catalogue.
                 error = e.localizedMessage ?: "O leitor direto não conseguiu extrair os títulos."
+                page = NexusPage(
+                    title = "Nexus Toons",
+                    url = url,
+                    entries = emptyList(),
+                    readerImages = emptyList()
+                )
                 needsDomFallback = true
                 domFallbackLoading = true
             } finally {
@@ -235,8 +241,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         }
 
         if (needsDomFallback) {
-            // WebView is kept visually hidden. It executes page JavaScript, then returns only
-            // the title/link list to the native catalogue screen.
+            // The WebView remains visible if native extraction cannot recognize the catalogue.
             AndroidView(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp),
                 factory = { context ->
@@ -248,6 +253,18 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         settings.allowContentAccess = false
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                         webViewClient = object : WebViewClient() {
+                            @Suppress("DEPRECATION")
+                            override fun onReceivedError(
+                                view: WebView?,
+                                errorCode: Int,
+                                description: String?,
+                                failingUrl: String?
+                            ) {
+                                domFallbackLoading = false
+                                domFallbackMessage = "O navegador não conseguiu carregar esta página: " +
+                                    (description ?: "erro de ligação") + ". Verifica a ligação ou tenta novamente."
+                            }
+
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 val web = view ?: return
                                 val finishedUrl = url ?: return
@@ -497,8 +514,11 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
       const cls = ((img.className || '') + ' ' + (img.id || '')).toLowerCase();
       return {url:imageOf(img), cls:cls, w:Number(img.naturalWidth || img.getAttribute('width') || 0),
         h:Number(img.naturalHeight || img.getAttribute('height') || 0)};
-    }).filter(x => x.url && (/(chapter|page|reading|reader|comic|scan|manga-page)/.test(x.cls) || x.w >= 260 || x.h >= 360))
-      .map(x => x.url).filter((u,i,a) => a.indexOf(u) === i).slice(0,120);
+    }).filter(x => x.url && (
+      /(chapter|page|reading|reader|comic|scan|manga-page)/.test(x.cls) ||
+      x.w >= 260 || x.h >= 360 ||
+      /(chapter|capitulo|manga-page|wp-content\/uploads|\/uploads\/)/i.test(x.url)
+    )).map(x => x.url).filter((u,i,a) => a.indexOf(u) === i).slice(0,120);
   }
   const h1 = document.querySelector('h1');
   const title = tidy(h1 && (h1.innerText || h1.textContent)) || tidy(document.title) || 'Nexus Toons';
