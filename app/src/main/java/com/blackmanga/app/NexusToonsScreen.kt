@@ -351,6 +351,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             web.postDelayed({ extractDomWhenReady() }, 1200L)
                                         } else {
                                             domFallbackLoading = false
+                                            needsDomFallback = false
                                             domFallbackMessage = "Não foi possível reconhecer os títulos automaticamente. Tenta novamente ou verifica a ligação."
                                         }
                                         return@evaluateJavascript
@@ -405,7 +406,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     needsDomFallback = combinedEntries.isEmpty() && combinedImages.isEmpty()
                                     domFallbackMessage = if (combinedEntries.isEmpty() && combinedImages.isEmpty()) {
                                         data.optString("debug", "O catálogo não forneceu títulos reconhecíveis.") +
-                                            " A página original fica oculta; tenta novamente ou verifica a ligação."
+                                            " O catálogo nativo não encontrou obras nesta página; tenta novamente."
                                     } else ""
                                     }
                                 }
@@ -466,7 +467,8 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     const parts = u.pathname.split('/').filter(Boolean);
     if (!parts.length || banned.has(parts[0].toLowerCase())) return false;
     const targetPath = (u.pathname || '/').replace(/\/$/, '').toLowerCase() || '/';
-    if (catalogueRoutes.has(currentPath) && parts[0].toLowerCase() !== 'manga') return false;
+    // Work routes may use /obra/, /series/, /manga/ or custom slugs. Exclude navigation
+    // sections above, but don't require a particular first URL segment on the home page.
     // On a work-detail page, skip links to other works but keep chapter paths and /r/ routes.
     if (currentPath.startsWith('/manga/') && parts[0].toLowerCase() === 'manga' && parts.length <= 2) return false;
     if (targetPath === currentPath || u.href.split('#')[0] === location.href.split('#')[0]) return false;
@@ -537,6 +539,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
   const sameSiteAnchors = allAnchors.filter(allowedLink);
   for (const a of sameSiteAnchors) {
     let title = tidy(a.innerText || a.textContent || '');
+    if (catalogueRoutes.has(currentPath) && chapterLabel.test(title)) continue;
     if (title.length > 180 || generic.test(title) || title.length < 2) {
       let node = a;
       for (let i = 0; i < 8 && node; i++, node = node.parentElement) {
