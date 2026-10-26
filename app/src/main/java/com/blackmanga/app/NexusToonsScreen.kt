@@ -983,7 +983,21 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
       const images = node.querySelectorAll ? node.querySelectorAll(imageSelector).length : 0;
       const selfHasArtwork = node.matches && node.matches(imageSelector);
       const backgrounds = node.querySelectorAll ? node.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background]').length : 0;
-      const hasArtwork = images > 0 || selfHasArtwork || backgrounds > 0;
+      const bgCandidates = node.querySelectorAll ? Array.from(node.querySelectorAll('[class*="cover"],[class*="thumb"],[class*="poster"],[class*="image"],[data-background],[data-bg],[data-lazy-background]')).slice(0, 12) : [];
+      let computedArtwork = false;
+      try {
+        const ownBackground = window.getComputedStyle(node).backgroundImage || '';
+        computedArtwork = ownBackground !== 'none' && /url\(/i.test(ownBackground);
+      } catch(e) {}
+      if (!computedArtwork) {
+        for (const candidate of bgCandidates) {
+          try {
+            const background = window.getComputedStyle(candidate).backgroundImage || '';
+            if (background !== 'none' && /url\(/i.test(background)) { computedArtwork = true; break; }
+          } catch(e) {}
+        }
+      }
+      const hasArtwork = images > 0 || selfHasArtwork || backgrounds > 0 || computedArtwork;
       // Usar o cartão ancestral mais próximo que contenha a ligação e uma imagem,
       // mesmo que o tema não use classes com "manga", "cover" ou "card".
       if (hasArtwork && workLinks >= 1 && workLinks <= 8) {
@@ -1036,7 +1050,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
         addCandidate(source.getAttribute('srcset'), 35, 'picture srcset');
         addCandidate(source.getAttribute('data-src'), 42, 'picture data-src');
       }
-      const bgNodes = [root, ...Array.from(root.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background],[data-bg-src]'))];
+      const bgNodes = [root, ...Array.from(root.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background],[data-bg-src],[class*="cover"],[class*="thumb"],[class*="poster"],[class*="image"]'))];
       for (const node of bgNodes) {
         const style = node.getAttribute('style') || '';
         const match = /background(?:-image)?\s*:\s*url\((?:['"])?([^'")]+)(?:['"])?\)/i.exec(style);
