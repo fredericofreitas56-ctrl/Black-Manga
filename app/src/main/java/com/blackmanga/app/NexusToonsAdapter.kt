@@ -109,8 +109,8 @@ internal object NexusToonsAdapter {
             // On the catalogue/home page, only manga detail URLs are works. This prevents
             // menu items such as "Biblioteca", "Loja" and "Conquistas" becoming fake titles.
             if (isCataloguePage && first != "manga") return false
-            // On a manga detail page, related manga links are not chapters.
-            if (sourcePath.startsWith("/manga/") && first == "manga") return false
+            // On a manga detail page, exclude other work pages but allow nested chapter routes.
+            if (sourcePath.startsWith("/manga/") && first == "manga" && segments.size <= 2) return false
 
             if (segments.size == 1 && first in setOf(
                     "manga", "manhwa", "manhua", "novel", "comic", "obra", "capitulo"
