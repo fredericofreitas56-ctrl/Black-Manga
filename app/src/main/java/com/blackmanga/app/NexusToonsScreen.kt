@@ -636,9 +636,18 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         if (needsDomFallback && domFallbackLoading) {
             Text("A identificar capas e capítulos…", Modifier.padding(6.dp), color = muted, fontSize = 11.sp)
         }
-        if (domFallbackMessage.isNotBlank() && !domFallbackLoading && page?.entries.isNullOrEmpty() && page?.chapters.isNullOrEmpty() && readerImages.isEmpty()) {
+        if (domFallbackMessage.isNotBlank() && !domFallbackLoading &&
+            page?.entries.isNullOrEmpty() && page?.chapters.isNullOrEmpty() && readerImages.isEmpty()) {
             Text(domFallbackMessage, Modifier.padding(10.dp), color = muted, fontSize = 12.sp)
             TextButton(onClick = { load(currentUrl, false) }) { Text("Tentar novamente", color = accent) }
+        }
+        if (viewMode == "catalog" && domFallbackMessage.startsWith("DIAGNÓSTICO CAPAS:") && !domFallbackLoading) {
+            Text(
+                domFallbackMessage,
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                color = muted,
+                fontSize = 10.sp
+            )
         }
         }
 
@@ -842,9 +851,12 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 else -> combinedEntries.isEmpty() ||
                                                     (finalCoverCoveragePoor && extractionAttempts < 20)
                                             }
-                                            domFallbackMessage = if (needsDomFallback) {
-                                                data.optString("debug", "Não foram encontrados elementos suficientes.")
-                                            } else ""
+                                            domFallbackMessage = when {
+                                                needsDomFallback -> data.optString("debug", "Não foram encontrados elementos suficientes.")
+                                                viewMode == "catalog" && finalCoverCoveragePoor ->
+                                                    data.optString("debug", "DIAGNÓSTICO CAPAS: extração incompleta.")
+                                                else -> ""
+                                            }
                                         }
                                     }
                                     web.postDelayed({ extractDomWhenReady() }, 1200L)
