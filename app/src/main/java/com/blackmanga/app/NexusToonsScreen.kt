@@ -937,8 +937,12 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     const url = validLink(anchor);
     if (!url) return false;
     const path = url.pathname.toLowerCase();
-    return /\/manga\//.test(path) ||
-      (isCatalogue && anchor.querySelector('img') && !banned.has(path.split('/').filter(Boolean)[0] || ''));
+    const firstSegment = path.split('/').filter(Boolean)[0] || '';
+    const card = cardFor(anchor);
+    const hasCardImage = !!(card && card.querySelector('img, [style*="background-image"]'));
+    const hasDescriptiveText = meaningful(anchor.innerText || anchor.textContent || anchor.getAttribute('title') || anchor.getAttribute('aria-label'));
+    return /\/(manga|obra|series|comic|manhwa|manhua)\//.test(path) ||
+      (isCatalogue && !banned.has(firstSegment) && (anchor.querySelector('img') || hasCardImage) && hasDescriptiveText);
   });
   for (const anchor of workAnchors) {
     const url = validLink(anchor);
@@ -952,12 +956,16 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     const card = cardFor(anchor);
     const heading = card && card.querySelector('h1,h2,h3,h4,h5,h6,[class*="manga-title"],[class*="book-title"],[class*="series-title"],[class*="title"],[class*="titulo"],[class*="name"]');
     const img = card && card.querySelector('img');
+    const ancestorTitle = anchor.closest('article,li,.swiper-slide,[class*="item"],[class*="card"],[class*="manga"],[class*="series"],[class*="book"],[class*="post"]');
+    const ancestorHeading = ancestorTitle && ancestorTitle.querySelector('h1,h2,h3,h4,h5,h6,[class*="title"],[class*="name"]');
     const title = [
       heading && (heading.innerText || heading.textContent),
+      ancestorHeading && (ancestorHeading.innerText || ancestorHeading.textContent),
       anchor.getAttribute('title'),
       anchor.getAttribute('aria-label'),
       img && img.getAttribute('alt'),
-      anchor.innerText || anchor.textContent
+      anchor.innerText || anchor.textContent,
+      ancestorTitle && (ancestorTitle.innerText || ancestorTitle.textContent)
     ].map(clean).find(meaningful) || '';
     if (!meaningful(title)) continue;
     const cover = chooseCover(anchor, card);
