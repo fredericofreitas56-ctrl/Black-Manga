@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -113,7 +114,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     title = directPage?.title?.takeIf { it.isNotBlank() }
                         ?: universalPage?.title?.takeIf { it.isNotBlank() }
                         ?: "Nexus Toons",
-                    url = directPage?.url ?: universalPage?.url ?: url,
+                    url = directPage?.url ?: universalPage?.url ?: destination,
                     entries = mergedEntries,
                     readerImages = mergedImages
                 )
@@ -466,7 +467,9 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
   };
   const generic = /^(ver detalhes|detalhes|ler agora|ler|abrir|ver mais|saiba mais|continuar lendo|read more|view more|view details|home|in[ií]cio|menu|pesquisar|buscar)$/i;
   // Do not exclude /obras or /novels: a source can use these as valid title routes.
-  const banned = new Set(['categoria','categorias','category','categories','genero','generos','genre','genres','tag','tags','search','pesquisa','pesquisar','busca','login','logout','register','registrar','u','user','users','perfil','profile','conta','account','sobre','contato','contact','politica','termos','ranking','notificacoes','notifications']);
+  const banned = new Set(['categoria','categorias','category','categories','genero','generos','genre','genres','tag','tags','search','pesquisa','pesquisar','busca','login','logout','register','registrar','u','user','users','perfil','profile','conta','account','sobre','contato','contact','politica','termos','ranking','notificacoes','notifications','loja','biblioteca','niveis','conquistas','comunidade','comunidades']);
+  const catalogueRoutes = new Set(['/','/biblioteca','/loja','/catalogo','/explorar','/niveis','/níveis','/conquistas','/comunidade','/comunidades']);
+  const currentPath = (location.pathname || '/').replace(/\\/$/, '').toLowerCase() || '/';
   const entries = [];
   const seen = new Set();
   const tidy = s => String(s || '').replace(/\s+/g, ' ').trim();
@@ -475,11 +478,16 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     catch(e) { return null; }
   };
   const allowedLink = a => {
+    if (a.closest('nav,header,footer,[role="navigation"]')) return false;
     const u = urlOf(a);
     if (!u || u.protocol !== 'https:' || !hostAllowed(u.hostname)) return false;
     const parts = u.pathname.split('/').filter(Boolean);
     if (!parts.length || banned.has(parts[0].toLowerCase())) return false;
-    if (u.href.split('#')[0] === location.href.split('#')[0]) return false;
+    const targetPath = (u.pathname || '/').replace(/\\/$/, '').toLowerCase() || '/';
+    if (catalogueRoutes.has(currentPath) && parts[0].toLowerCase() !== 'manga') return false;
+    // On a work-detail page, skip links to other works but keep chapter paths and /r/ routes.
+    if (currentPath.startsWith('/manga/') && parts[0].toLowerCase() === 'manga' && parts.length <= 2) return false;
+    if (targetPath === currentPath || u.href.split('#')[0] === location.href.split('#')[0]) return false;
     return true;
   };
   const imageOf = img => {
