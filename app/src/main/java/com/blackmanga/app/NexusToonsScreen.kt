@@ -551,7 +551,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     val visibleEntries = if (typeFilter == "Todos") byGenre else byGenre.filter {
                         it.kind.equals(typeFilter, ignoreCase = true)
                     }
-                    val imageCounts = visibleEntries.mapNotNull { it.imageUrl }.groupingBy { it }.eachCount()
+                    // Não ocultar capas quando dois cartões partilham o mesmo URL.
 
                     Text(
                         visibleEntries.size.toString() + " títulos",
@@ -578,7 +578,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 colors = CardDefaults.cardColors(containerColor = Color.Transparent)
                             ) {
                                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    val image = entry.imageUrl?.takeIf { (imageCounts[it] ?: 0) == 1 }
+                                    val image = entry.imageUrl?.takeIf { it.isNotBlank() }
                                     if (!image.isNullOrBlank()) {
                                         AsyncImage(
                                             model = ImageRequest.Builder(imageContext)
@@ -865,6 +865,8 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
       img.getAttribute('data-image'), img.getAttribute('data-cfsrc'),
       img.getAttribute('data-echo'), img.getAttribute('data-url'),
       img.getAttribute('data-srcset'), img.getAttribute('data-lazy-srcset'),
+      img.getAttribute('data-image-src'), img.getAttribute('data-original-src'),
+      img.getAttribute('data-lazy'), img.getAttribute('data-flickity-lazyload'),
       img.getAttribute('srcset'), img.getAttribute('data-src'),
       img.getAttribute('src'), img.currentSrc
     ];
@@ -889,8 +891,8 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     for (let depth = 0; depth < 9 && node; depth++, node = node.parentElement) {
       const classes = ((node.className || '') + ' ' + (node.id || '')).toLowerCase();
       const workLinks = node.querySelectorAll ? node.querySelectorAll('a[href]').length : 0;
-      const images = node.querySelectorAll ? node.querySelectorAll('img').length : 0;
-      const backgrounds = node.querySelectorAll ? node.querySelectorAll('[style*="background"]').length : 0;
+      const images = node.querySelectorAll ? node.querySelectorAll('img, picture source, [data-src], [data-lazy-src], [data-original], [data-background], [data-bg], [style*="background-image"]').length : 0;
+      const backgrounds = node.querySelectorAll ? node.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background]').length : 0;
       const likely = node.matches && node.matches('article,li,.swiper-slide,.page-item-detail,.c-tabs-item__content,.bsx,.utao,.manga-item,.manga-card,.series-item,.book-item,.post-item,.item,.thumbnail,.manga-listing .manga');
       const named = /(manga|manhwa|manhua|comic|series|book|cover|thumb|poster|post-item|entry-card|swiper-slide|item|card)/.test(classes);
       const hasArtwork = images > 0 || backgrounds > 0;
