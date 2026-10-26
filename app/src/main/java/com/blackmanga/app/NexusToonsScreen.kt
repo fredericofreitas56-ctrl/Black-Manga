@@ -11,8 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +21,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.GridCells
+import androidx.compose.foundation.lazy.LazyVerticalGrid
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -233,72 +236,47 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         fontSize = 13.sp
                     )
                 }
-                Column(
-                    Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 78.dp),
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    visibleEntries.chunked(2).forEach { rowEntries ->
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    items(visibleEntries, key = { it.url }) { entry ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().clickable { load(entry.url) },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.Transparent)
                         ) {
-                            rowEntries.forEach { entry ->
-                                Card(
-                                    modifier = Modifier.weight(1f).clickable { load(entry.url) },
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A22))
-                                ) {
-                                    Column(
-                                        Modifier.fillMaxWidth().padding(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                            Column(
+                                Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                if (!entry.imageUrl.isNullOrBlank()) {
+                                    AsyncImage(
+                                        model = entry.imageUrl,
+                                        contentDescription = entry.title,
+                                        modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Box(
+                                        Modifier.fillMaxWidth().aspectRatio(0.68f)
+                                            .background(Color(0xFF302A3B), RoundedCornerShape(6.dp)),
+                                        contentAlignment = Alignment.Center
                                     ) {
-                                        if (!entry.imageUrl.isNullOrBlank()) {
-                                            AsyncImage(
-                                                model = entry.imageUrl,
-                                                contentDescription = entry.title,
-                                                modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
-                                                contentScale = ContentScale.Crop
-                                            )
-                                        } else {
-                                            Box(
-                                                Modifier.fillMaxWidth().aspectRatio(0.68f)
-                                                    .background(Color(0xFF302A3B), RoundedCornerShape(8.dp)),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Text("NEXUS TOONS", color = Color(0xFFB7A0FF), fontSize = 10.sp)
-                                            }
-                                        }
-                                        Text(
-                                            entry.title,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 3,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        if (entry.description.isNotBlank()) {
-                                            Text(
-                                                entry.description,
-                                                color = Color(0xFFB8B5C5),
-                                                fontSize = 11.sp,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                        Text(
-                                            if (entry.url.contains("/r/", true) ||
-                                                entry.url.contains("capitulo", true) ||
-                                                entry.url.contains("chapter", true) ||
-                                                entry.url.contains("read", true)) "Abrir capítulo ›"
-                                            else "Ver obra ›",
-                                            color = Color(0xFFB7A0FF),
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
+                                        Text("NEXUS", color = Color(0xFFB7A0FF), fontSize = 9.sp)
                                     }
                                 }
-                            }
-                            if (rowEntries.size == 1) {
-                                Spacer(Modifier.weight(1f))
+                                Text(
+                                    entry.title,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontSize = 12.sp
+                                )
                             }
                         }
                     }
