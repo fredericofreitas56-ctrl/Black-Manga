@@ -907,7 +907,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     const candidates = [];
     const addCandidate = (raw, score, label) => {
       if (!raw) return;
-      const parts = String(raw).split(',').map(part => clean(part).split(/\\s+/)[0]).filter(Boolean);
+      const parts = String(raw).split(',').map(part => clean(part).split(/\s+/)[0]).filter(Boolean);
       for (const part of parts) {
         if (!part || part.startsWith('data:image') || /^(about:blank|javascript:|#)$/i.test(part)) continue;
         try {
