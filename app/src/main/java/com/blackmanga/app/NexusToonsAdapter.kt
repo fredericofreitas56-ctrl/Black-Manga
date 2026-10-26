@@ -149,26 +149,40 @@ internal object NexusToonsAdapter {
             val classes = (img.className() + " " + img.id() + " " + img.attr("alt")).lowercase()
             if (listOf("avatar", "profile", "user-icon", "emoji", "favicon", "sprite", "mascot", "placeholder")
                     .any { classes.contains(it) }) return null
-            val candidate = sequenceOf(
+
+            // Sites often leave a transparent pixel in src and keep the real cover in
+            // a lazy-loading attribute. Prefer those attributes and choose the largest
+            // candidate from srcset instead of accidentally selecting its smallest image.
+            val candidates = listOf(
                 "data-src", "data-lazy-src", "data-original", "data-lazyload",
                 "data-url", "data-image", "data-cfsrc", "data-echo",
-                "src", "data-srcset", "data-lazy-srcset", "srcset"
-            ).map { attr ->
-                val raw = img.attr(attr).split(",").firstOrNull().orEmpty()
-                    .trim().split(Regex("\\s+")).firstOrNull().orEmpty()
-                if (raw.isBlank()) "" else try {
+                "data-srcset", "data-lazy-srcset", "srcset", "src"
+            ).flatMap { attr ->
+                val value = img.attr(attr).trim()
+                if (value.isBlank()) emptyList() else if (attr.contains("srcset")) {
+                    value.split(",").mapNotNull { part ->
+                        part.trim().split(Regex("\\s+")).firstOrNull()?.takeIf { it.isNotBlank() }
+                    }.reversed()
+                } else listOf(value)
+            }.distinct()
+
+            return candidates.asSequence().mapNotNull { raw ->
+                try {
                     URI(img.baseUri()).resolve(URI(raw)).toString()
                 } catch (_: Exception) {
-                    img.absUrl("src")
+                    img.absUrl("src").takeIf { it.isNotBlank() }
                 }
-            }.firstOrNull {
-                it.startsWith("https://") && !it.contains("data:image", true) &&
-                    !it.contains("placeholder", true)
-            }
-            return candidate?.takeIf {
-                val lower = it.lowercase()
-                !listOf("logo", "avatar", "favicon", "emoji", "sprite", "mascot", "placeholder", "profile")
-                    .any { marker -> lower.contains(marker) }
+            }.firstOrNull { candidate ->
+                candidate.startsWith("https://", true) &&
+                    !candidate.contains("data:image", true) &&
+                    !candidate.contains("placeholder", true) &&
+                    !candidate.contains("blank.gif", true) &&
+                    !candidate.contains("spacer", true) &&
+                    run {
+                        val lower = candidate.lowercase()
+                        !listOf("logo", "avatar", "favicon", "emoji", "sprite", "mascot", "placeholder", "profile")
+                            .any { marker -> lower.contains(marker) }
+                    }
             }
         }
 
