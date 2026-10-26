@@ -79,6 +79,29 @@ internal object NexusToonsAdapter {
         rawUrl
     }
 
+    fun isReaderUrl(rawUrl: String): Boolean = try {
+        val path = URI(rawUrl.trim()).path.orEmpty().lowercase()
+        path.startsWith("/r/") || listOf(
+            "/capitulo/", "/chapter/", "/leitura/", "/read/", "/episode/", "/episodio/"
+        ).any { path.contains(it) }
+    } catch (_: Exception) { false }
+
+    fun isCatalogueUrl(rawUrl: String): Boolean = try {
+        val uri = URI(rawUrl.trim())
+        val path = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }.lowercase()
+        supports(rawUrl) && (
+            path in catalogueRoutes ||
+            path.startsWith("/genero/") || path.startsWith("/generos/") ||
+            path.startsWith("/genre/") || path.startsWith("/genres/") ||
+            path.startsWith("/categoria/") || path.startsWith("/categorias/") ||
+            path.startsWith("/tag/") ||
+            Regex("/page/\\d+").containsMatchIn(path) ||
+            Regex("/pagina/\\d+").containsMatchIn(path) ||
+            uri.rawQuery.orEmpty().contains("paged=") ||
+            uri.rawQuery.orEmpty().contains("page=")
+        )
+    } catch (_: Exception) { false }
+
     suspend fun load(rawUrl: String): NexusPage = withContext(Dispatchers.IO) {
         val uri = URI(rawUrl.trim())
         require(uri.scheme.equals("https", true) && supports(rawUrl)) {
@@ -100,8 +123,11 @@ internal object NexusToonsAdapter {
             val classes = (img.className() + " " + img.id() + " " + img.attr("alt")).lowercase()
             if (listOf("avatar", "profile", "user-icon", "emoji", "favicon", "sprite", "mascot", "placeholder")
                     .any { classes.contains(it) }) return null
-            val candidate = sequenceOf("data-src", "data-lazy-src", "data-original", "data-lazyload", "data-url", "src")
-                .map { attr -> img.absUrl(attr) }
+            val candidate = sequenceOf("data-src", "data-lazy-src", "data-original", "data-lazyload", "data-url", "src", "srcset", "data-srcset", "data-lazy-srcset")
+                .map { attr -> 
+                    val raw = img.attr(attr).substringBefore(",").trim().split(Regex("\\s+")).firstOrNull().orEmpty()
+                    if (raw.isBlank()) "" else try { URI(raw).let { if (it.isAbsolute) raw else img.absUrl(attr) } } catch (_: Exception) { img.absUrl(attr) }
+                }
                 .firstOrNull { it.startsWith("https://") && !it.contains("data:image", true) }
             return candidate?.takeIf {
                 val lower = it.lowercase()
@@ -169,7 +195,7 @@ internal object NexusToonsAdapter {
             if (first in excludedFirstPathSegments) return false
 
             val sourcePath = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }.lowercase()
-            val isCataloguePage = sourcePath in catalogueRoutes
+            val isCataloguePage = isCatalogueUrl(pageUrl)
             // The site's work URLs are not guaranteed to use /manga/. Keep all same-site
             // work routes on catalogue pages, while excluding menus and chapter links.
             if (isCataloguePage && Regex(
@@ -281,8 +307,8 @@ internal object NexusToonsAdapter {
                 val target = runCatching { URI(link) }.getOrNull() ?: return@mapNotNull null
                 if (!supports(link) || !link.startsWith("https://")) return@mapNotNull null
                 val route = target.path.orEmpty().lowercase()
-                if (!route.contains("/genero/") && !route.contains("/generos/") &&
-                    !route.contains("/genre/") && !route.contains("/genres/")) return@mapNotNull null
+                if (!listOf("/genero/", "/generos/", "/genre/", "/genres/", "/categoria/", "/categorias/", "/tag/")
+                        .any { route.contains(it) }) return@mapNotNull null
                 NexusGenre(text, link)
             }
             .distinctBy { it.url }
