@@ -57,7 +57,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,6 +67,7 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val imageContext = LocalContext.current
     val paper = Color(0xFFFFF8F5)
     val ink = Color(0xFF292321)
     val muted = Color(0xFF8A7268)
@@ -345,7 +348,12 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.Top) {
                             if (!coverUrl.isNullOrBlank()) {
                                 AsyncImage(
-                                    model = coverUrl,
+                                    model = ImageRequest.Builder(imageContext)
+                                        .data(coverUrl)
+                                        .setHeader("Referer", "https://nexustoons.com/")
+                                        .setHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36")
+                                        .crossfade(true)
+                                        .build(),
                                     contentDescription = displayTitle,
                                     modifier = Modifier.size(width = 124.dp, height = 178.dp),
                                     contentScale = ContentScale.Crop
@@ -573,7 +581,12 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     val image = entry.imageUrl?.takeIf { (imageCounts[it] ?: 0) == 1 }
                                     if (!image.isNullOrBlank()) {
                                         AsyncImage(
-                                            model = image,
+                                            model = ImageRequest.Builder(imageContext)
+                                                .data(image)
+                                                .setHeader("Referer", "https://nexustoons.com/")
+                                                .setHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36")
+                                                .crossfade(true)
+                                                .build(),
                                             contentDescription = entry.title,
                                             modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
                                             contentScale = ContentScale.Crop
