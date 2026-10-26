@@ -227,7 +227,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         }
     }
 
-    Column(Modifier.fillMaxSize().background(if (viewMode == "reader") Color(0xFF101014) else paper)) {
+    Box(Modifier.fillMaxSize().background(if (viewMode == "reader") Color(0xFF101014) else paper)) {
+        Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth()
                 .background(if (viewMode == "reader") Color(0xFF101014) else Color(0xFFFFF2EB))
@@ -584,10 +585,19 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             }
         }
 
+        if (needsDomFallback && domFallbackLoading) {
+            Text("A identificar capas e capítulos…", Modifier.padding(6.dp), color = muted, fontSize = 11.sp)
+        }
+        if (domFallbackMessage.isNotBlank() && !domFallbackLoading && page?.entries.isNullOrEmpty() && page?.chapters.isNullOrEmpty() && readerImages.isEmpty()) {
+            Text(domFallbackMessage, Modifier.padding(10.dp), color = muted, fontSize = 12.sp)
+            TextButton(onClick = { load(currentUrl, false) }) { Text("Tentar novamente", color = accent) }
+        }
+        }
+
         if (needsDomFallback) {
             key(currentUrl) {
                 AndroidView(
-                    modifier = Modifier.size(1.dp),
+                    modifier = Modifier.fillMaxSize(),
                     factory = { context ->
                         WebView(context).apply {
                             visibility = View.INVISIBLE
@@ -760,13 +770,6 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     }
                 )
             }
-            if (domFallbackLoading) {
-                Text("A identificar capas e capítulos…", Modifier.padding(6.dp), color = muted, fontSize = 11.sp)
-            }
-        }
-        if (domFallbackMessage.isNotBlank() && !domFallbackLoading && page?.entries.isNullOrEmpty() && page?.chapters.isNullOrEmpty() && readerImages.isEmpty()) {
-            Text(domFallbackMessage, Modifier.padding(10.dp), color = muted, fontSize = 12.sp)
-            TextButton(onClick = { load(currentUrl, false) }) { Text("Tentar novamente", color = accent) }
         }
     }
 }
