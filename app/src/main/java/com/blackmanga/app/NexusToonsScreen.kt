@@ -559,6 +559,14 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         color = muted,
                         fontSize = 12.sp
                     )
+                    if (viewMode == "catalog" && domFallbackMessage.startsWith("DIAGNÓSTICO CAPAS:") && !domFallbackLoading) {
+                        Text(
+                            domFallbackMessage,
+                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 3.dp),
+                            color = Color(0xFFB53C32),
+                            fontSize = 10.sp
+                        )
+                    }
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(4),
                         modifier = Modifier.weight(1f).fillMaxWidth(),
