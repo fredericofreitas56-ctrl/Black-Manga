@@ -149,16 +149,22 @@ internal object NexusToonsAdapter {
             val classes = (img.className() + " " + img.id() + " " + img.attr("alt")).lowercase()
             if (listOf("avatar", "profile", "user-icon", "emoji", "favicon", "sprite", "mascot", "placeholder")
                     .any { classes.contains(it) }) return null
-            val candidate = sequenceOf("data-src", "data-lazy-src", "data-original", "data-lazyload", "data-url", "src", "srcset", "data-srcset", "data-lazy-srcset")
-                .map { attr ->
-                    val raw = img.attr(attr).substringBefore(",").trim().split(Regex("\\s+")).firstOrNull().orEmpty()
-                    if (raw.isBlank()) "" else try {
-                        URI(img.baseUri()).resolve(URI(raw)).toString()
-                    } catch (_: Exception) {
-                        img.absUrl("src")
-                    }
+            val candidate = sequenceOf(
+                "data-src", "data-lazy-src", "data-original", "data-lazyload",
+                "data-url", "data-image", "data-cfsrc", "data-echo",
+                "src", "data-srcset", "data-lazy-srcset", "srcset"
+            ).map { attr ->
+                val raw = img.attr(attr).split(",").firstOrNull().orEmpty()
+                    .trim().split(Regex("\\s+")).firstOrNull().orEmpty()
+                if (raw.isBlank()) "" else try {
+                    URI(img.baseUri()).resolve(URI(raw)).toString()
+                } catch (_: Exception) {
+                    img.absUrl("src")
                 }
-                .firstOrNull { it.startsWith("https://") && !it.contains("data:image", true) }
+            }.firstOrNull {
+                it.startsWith("https://") && !it.contains("data:image", true) &&
+                    !it.contains("placeholder", true)
+            }
             return candidate?.takeIf {
                 val lower = it.lowercase()
                 !listOf("logo", "avatar", "favicon", "emoji", "sprite", "mascot", "placeholder", "profile")
@@ -373,22 +379,35 @@ internal object NexusToonsAdapter {
             pathLower.contains("episode")
 
         val pageImages = if (readerLike) {
-            document.select("img")
+            val pageSelectors = listOf(
+                ".reading-content img", ".chapter-content img", ".chapter-images img",
+                ".reader-area img", ".reader img", ".reading-detail img",
+                ".wp-manga-chapter-img", ".page-break img", "#readerarea img",
+                "#chapter_imgs img", "[class*=reader] img", "[class*=chapter] img",
+                "[class*=page] img", "main img", "article img", "img"
+            )
+            pageSelectors.asSequence()
+                .flatMap { selector -> document.select(selector).asSequence() }
+                .distinctBy { it.outerHtml() }
                 .filter { img ->
-                    val classes = (img.className() + " " + img.id()).lowercase()
-                    absoluteImage(img) != null && (
+                    val classes = (img.className() + " " + img.id() + " " + img.attr("alt")).lowercase()
+                    val url = absoluteImage(img).orEmpty().lowercase()
+                    val excluded = listOf("logo", "avatar", "icon", "emoji", "mascot", "sprite", "placeholder", "banner")
+                        .any { classes.contains(it) || url.contains(it) }
+                    !excluded && absoluteImage(img) != null && (
                         classes.contains("chapter") || classes.contains("page") ||
-                            classes.contains("reading") || classes.contains("wp-manga") ||
-                            classes.contains("manga-page") ||
-                            img.attr("width").toIntOrNull()?.let { it > 250 } == true ||
-                            (opaqueReaderRoute && img.parents().none { parent ->
-                                parent.normalName() in setOf("header", "nav", "footer", "aside")
-                            })
-                        )
+                        classes.contains("reading") || classes.contains("reader") ||
+                        classes.contains("wp-manga") || classes.contains("manga-page") ||
+                        img.attr("width").toIntOrNull()?.let { it > 250 } == true ||
+                        img.attr("height").toIntOrNull()?.let { it > 350 } == true ||
+                        (opaqueReaderRoute && img.parents().none { parent ->
+                            parent.normalName() in setOf("header", "nav", "footer", "aside")
+                        })
+                    )
                 }
                 .mapNotNull { absoluteImage(it) }
                 .distinct()
-                .take(100)
+                .take(150)
         } else emptyList()
 
         val allImages = document.select("img").mapNotNull { absoluteImage(it) }.distinct()
