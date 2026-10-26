@@ -127,8 +127,16 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     readerImages = result.readerImages
                     readerTitle = result.title
                 }
-                if (result.entries.isEmpty() && result.readerImages.isEmpty()) {
-                    // Keep the visible WebView as a fallback rather than leaving a blank screen.
+                val requestedPath = runCatching {
+                    java.net.URI(destination).path.orEmpty().trimEnd('/').ifBlank { "/" }.lowercase()
+                }.getOrDefault("/")
+                val isCatalogueLanding = requestedPath in setOf(
+                    "/", "/biblioteca", "/loja", "/catalogo", "/explorar", "/niveis",
+                    "/conquistas", "/comunidade"
+                )
+                if ((result.entries.isEmpty() && result.readerImages.isEmpty()) ||
+                    (isCatalogueLanding && result.entries.size < 12 && result.readerImages.isEmpty())) {
+                    // Use an invisible WebView to enrich the native catalogue for JS-rendered lists.
                     needsDomFallback = true
                     domFallbackLoading = true
                 }
@@ -388,7 +396,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     val currentPage = page
                                     val fallbackTitle = data.optString("title", "Nexus Toons")
                                         .ifBlank { "Nexus Toons" }
-                                    val combinedEntries = if (extracted.isNotEmpty()) extracted else currentPage?.entries.orEmpty()
+                                    val combinedEntries = (currentPage?.entries.orEmpty() + extracted)
+                                        .distinctBy { it.url }
+                                        .take(300)
                                     val combinedImages = if (extractedImages.isNotEmpty()) extractedImages
                                         else currentPage?.readerImages.orEmpty()
                                     page = NexusPage(
