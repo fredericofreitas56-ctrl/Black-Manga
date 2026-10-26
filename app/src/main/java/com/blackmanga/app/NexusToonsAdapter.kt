@@ -378,7 +378,8 @@ internal object NexusToonsAdapter {
             pathLower.contains("read") || pathLower.contains("episodio") ||
             pathLower.contains("episode")
 
-        val pageImages = if (readerLike) {
+        val pageImages: List<String> = if (readerLike) {
+            val found = mutableListOf<String>()
             val pageSelectors = listOf(
                 ".reading-content img", ".chapter-content img", ".chapter-images img",
                 ".reader-area img", ".reader img", ".reading-detail img",
@@ -386,28 +387,29 @@ internal object NexusToonsAdapter {
                 "#chapter_imgs img", "[class*=reader] img", "[class*=chapter] img",
                 "[class*=page] img", "main img", "article img", "img"
             )
-            pageSelectors.asSequence()
-                .flatMap { selector -> document.select(selector).asSequence() }
-                .distinctBy { it.outerHtml() }
-                .filter { img ->
+            for (selector in pageSelectors) {
+                for (img in document.select(selector)) {
                     val classes = (img.className() + " " + img.id() + " " + img.attr("alt")).lowercase()
-                    val url = absoluteImage(img).orEmpty().lowercase()
+                    val url = absoluteImage(img).orEmpty()
+                    val lowerUrl = url.lowercase()
                     val excluded = listOf("logo", "avatar", "icon", "emoji", "mascot", "sprite", "placeholder", "banner")
-                        .any { classes.contains(it) || url.contains(it) }
-                    !excluded && absoluteImage(img) != null && (
-                        classes.contains("chapter") || classes.contains("page") ||
+                        .any { classes.contains(it) || lowerUrl.contains(it) }
+                    val likelyPage = classes.contains("chapter") || classes.contains("page") ||
                         classes.contains("reading") || classes.contains("reader") ||
                         classes.contains("wp-manga") || classes.contains("manga-page") ||
-                        img.attr("width").toIntOrNull()?.let { it > 250 } == true ||
-                        img.attr("height").toIntOrNull()?.let { it > 350 } == true ||
+                        (img.attr("width").toIntOrNull() ?: 0) > 250 ||
+                        (img.attr("height").toIntOrNull() ?: 0) > 350 ||
                         (opaqueReaderRoute && img.parents().none { parent ->
                             parent.normalName() in setOf("header", "nav", "footer", "aside")
                         })
-                    )
+                    if (!excluded && likelyPage && url.startsWith("https://") && !found.contains(url)) {
+                        found.add(url)
+                        if (found.size >= 150) break
+                    }
                 }
-                .mapNotNull { absoluteImage(it) }
-                .distinct()
-                .take(150)
+                if (found.size >= 150) break
+            }
+            found
         } else emptyList()
 
         val allImages = document.select("img").mapNotNull { absoluteImage(it) }.distinct()
