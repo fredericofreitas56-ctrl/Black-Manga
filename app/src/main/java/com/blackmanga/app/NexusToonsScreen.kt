@@ -1000,15 +1000,17 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
   const nextPageUrl = nextAnchor && urlOf(nextAnchor) && sameSite(urlOf(nextAnchor)) ? urlOf(nextAnchor).href : '';
   const readerImages = [];
   if (isReader) {
+    const opaqueReader = /^\/r\//.test(location.pathname);
     const selectors = '.reading-content img,.page-break img,.wp-manga-chapter-img,.chapter-content img,.reader-area img,.chapter-images img,#readerarea img,.container-chapter-reader img,#chapter_imgs img,.reading-detail img,.reader img,.comic-page img,.ts-main-image,[class*="reader"] img,[class*="chapter"] img,[class*="page"] img,img';
     for (const img of Array.from(document.querySelectorAll(selectors))) {
+      if (opaqueReader && img.closest('header,nav,footer,aside,[role="navigation"]')) continue;
       const url = imageUrl(img);
       if (!url) continue;
       const classes = ((img.className || '') + ' ' + (img.id || '')).toLowerCase();
       const width = Number(img.naturalWidth || img.getAttribute('width') || 0);
       const height = Number(img.naturalHeight || img.getAttribute('height') || 0);
       if (/(logo|avatar|icon|emoji|mascot|sprite|placeholder|banner)/i.test(classes + ' ' + url)) continue;
-      if (/(chapter|page|reading|reader|comic|scan|manga-page)/.test(classes) || width >= 260 || height >= 360 || /\/uploads\//i.test(url)) {
+      if (opaqueReader || /(chapter|page|reading|reader|comic|scan|manga-page)/.test(classes) || width >= 260 || height >= 360 || /\/uploads\//i.test(url)) {
         if (!readerImages.includes(url)) readerImages.push(url);
       }
       if (readerImages.length >= 150) break;
