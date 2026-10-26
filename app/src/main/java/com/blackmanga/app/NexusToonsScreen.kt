@@ -862,33 +862,44 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     const candidates = [
       img.getAttribute('data-src'), img.getAttribute('data-lazy-src'),
       img.getAttribute('data-original'), img.getAttribute('data-lazyload'),
-      img.getAttribute('data-url'), img.getAttribute('data-srcset'),
-      img.getAttribute('data-lazy-srcset'), img.currentSrc, img.src,
-      img.getAttribute('srcset')
+      img.getAttribute('data-image'), img.getAttribute('data-cfsrc'),
+      img.getAttribute('data-echo'), img.getAttribute('data-url'),
+      img.getAttribute('data-srcset'), img.getAttribute('data-lazy-srcset'),
+      img.getAttribute('srcset'), img.getAttribute('data-src'),
+      img.getAttribute('src'), img.currentSrc
     ];
     for (const raw of candidates) {
-      const candidate = clean(raw).split(',')[0].split(/\s+/)[0];
-      if (!candidate || candidate.startsWith('data:image')) continue;
-      try {
-        const resolved = new URL(candidate, location.href);
-        if (resolved.protocol !== 'https:') continue;
-        if (/(logo|avatar|favicon|emoji|sprite|mascot|placeholder|profile|banner-ad)/i.test(resolved.href)) continue;
-        return resolved.href;
-      } catch(e) {}
+      if (!raw) continue;
+      const tokens = String(raw).split(',').map(part => clean(part).split(/\s+/)[0]).filter(Boolean);
+      for (const candidate of tokens) {
+        if (!candidate || candidate.startsWith('data:image') || candidate === '#' || candidate.startsWith('javascript:')) continue;
+        try {
+          const resolved = new URL(candidate, location.href);
+          if (resolved.protocol !== 'https:') continue;
+          if (/(logo|avatar|favicon|emoji|sprite|mascot|placeholder|profile|banner-ad|blank\.(gif|png|jpg))/i.test(resolved.href)) continue;
+          return resolved.href;
+        } catch(e) {}
+      }
     }
     return '';
   };
   const cardFor = anchor => {
     let node = anchor;
+    let fallback = null;
     for (let depth = 0; depth < 9 && node; depth++, node = node.parentElement) {
       const classes = ((node.className || '') + ' ' + (node.id || '')).toLowerCase();
-      const workLinks = node.querySelectorAll ? node.querySelectorAll('a[href*="/manga/"]').length : 0;
+      const workLinks = node.querySelectorAll ? node.querySelectorAll('a[href]').length : 0;
       const images = node.querySelectorAll ? node.querySelectorAll('img').length : 0;
+      const backgrounds = node.querySelectorAll ? node.querySelectorAll('[style*="background"]').length : 0;
       const likely = node.matches && node.matches('article,li,.swiper-slide,.page-item-detail,.c-tabs-item__content,.bsx,.utao,.manga-item,.manga-card,.series-item,.book-item,.post-item,.item,.thumbnail,.manga-listing .manga');
-      const named = /(manga|manhwa|manhua|comic|series|book|cover|thumb|poster|post-item|entry-card|swiper-slide)/.test(classes);
-      if ((likely || named) && workLinks >= 1 && workLinks <= 3 && images >= 1 && images <= 6) return node;
+      const named = /(manga|manhwa|manhua|comic|series|book|cover|thumb|poster|post-item|entry-card|swiper-slide|item|card)/.test(classes);
+      const hasArtwork = images > 0 || backgrounds > 0;
+      if ((likely || named) && hasArtwork && workLinks >= 1 && workLinks <= 8) {
+        if (images > 0) return node;
+        fallback = fallback || node;
+      }
     }
-    return anchor.closest('article,li,.swiper-slide,.page-item-detail,.c-tabs-item__content,.bsx,.utao,.manga-item,.manga-card,.series-item,.book-item,.item');
+    return fallback || anchor.closest('article,li,.swiper-slide,.page-item-detail,.c-tabs-item__content,.bsx,.utao,.manga-item,.manga-card,.series-item,.book-item,.item,[class*="card"]');
   };
   const chooseCover = (anchor, card) => {
     const images = [];
@@ -912,14 +923,15 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     }).filter(item => item.url).sort((a,b) => b.score-a.score);
     if (ranked.length) return ranked[0].url;
     if (card) {
-      const bgNodes = [card, ...Array.from(card.querySelectorAll('[style*="background"]'))];
+      const bgNodes = [card, ...Array.from(card.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background]'))];
       for (const node of bgNodes) {
         const style = node.getAttribute('style') || '';
-        const match = /background-image\s*:\s*url\(['"]?([^'")]+)['"]?\)/i.exec(style);
-        if (match) {
+        const match = /background-image\s*:\s*url\((?:['"])?([^'")]+)(?:['"])?\)/i.exec(style);
+        const raw = match ? match[1] : (node.getAttribute('data-background') || node.getAttribute('data-bg') || node.getAttribute('data-lazy-background') || '');
+        if (raw) {
           try {
-            const resolved = new URL(match[1], location.href);
-            if (resolved.protocol === 'https:' && !/(logo|avatar|mascot|placeholder)/i.test(resolved.href)) return resolved.href;
+            const resolved = new URL(raw, location.href);
+            if (resolved.protocol === 'https:' && !/(logo|avatar|mascot|placeholder|sprite|banner)/i.test(resolved.href)) return resolved.href;
           } catch(e) {}
         }
       }
