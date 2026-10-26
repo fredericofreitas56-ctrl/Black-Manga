@@ -35,6 +35,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -474,7 +475,18 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         onValueChange = { filter = it },
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp),
                         label = { Text("Pesquisar títulos") },
-                        singleLine = true
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = ink,
+                            unfocusedTextColor = ink,
+                            focusedLabelColor = accent,
+                            unfocusedLabelColor = muted,
+                            focusedBorderColor = accent,
+                            unfocusedBorderColor = Color(0xFFCBB4A8),
+                            cursorColor = accent,
+                            focusedContainerColor = Color.White,
+                            unfocusedContainerColor = Color.White
+                        )
                     )
 
                     if (loaded.genres.isNotEmpty()) {
