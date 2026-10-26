@@ -975,21 +975,23 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
   };
   const cardFor = anchor => {
     let node = anchor;
-    let fallback = null;
+    let backgroundFallback = null;
     for (let depth = 0; depth < 9 && node; depth++, node = node.parentElement) {
-      const classes = ((node.className || '') + ' ' + (node.id || '')).toLowerCase();
-      const workLinks = node.querySelectorAll ? node.querySelectorAll('a[href]').length : 0;
-      const images = node.querySelectorAll ? node.querySelectorAll('img, picture source, [data-src], [data-lazy-src], [data-original], [data-background], [data-bg], [style*="background-image"]').length : 0;
+      const descendantLinks = node.querySelectorAll ? node.querySelectorAll('a[href]').length : 0;
+      const workLinks = descendantLinks + (node.matches && node.matches('a[href]') ? 1 : 0);
+      const imageSelector = 'img, picture source, [data-src], [data-lazy-src], [data-original], [data-lazy-srcset], [data-srcset], [data-image], [data-background], [data-bg], [data-lazy-background], [style*="background-image"]';
+      const images = node.querySelectorAll ? node.querySelectorAll(imageSelector).length : 0;
+      const selfHasArtwork = node.matches && node.matches(imageSelector);
       const backgrounds = node.querySelectorAll ? node.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background]').length : 0;
-      const likely = node.matches && node.matches('article,li,.swiper-slide,.page-item-detail,.c-tabs-item__content,.bsx,.utao,.manga-item,.manga-card,.series-item,.book-item,.post-item,.item,.thumbnail,.manga-listing .manga');
-      const named = /(manga|manhwa|manhua|comic|series|book|cover|thumb|poster|post-item|entry-card|swiper-slide|item|card)/.test(classes);
-      const hasArtwork = images > 0 || backgrounds > 0;
-      if ((likely || named) && hasArtwork && workLinks >= 1 && workLinks <= 8) {
-        if (images > 0) return node;
-        fallback = fallback || node;
+      const hasArtwork = images > 0 || selfHasArtwork || backgrounds > 0;
+      // Usar o cartão ancestral mais próximo que contenha a ligação e uma imagem,
+      // mesmo que o tema não use classes com "manga", "cover" ou "card".
+      if (hasArtwork && workLinks >= 1 && workLinks <= 8) {
+        if (images > 0 || selfHasArtwork) return node;
+        backgroundFallback = backgroundFallback || node;
       }
     }
-    return fallback || anchor.closest('article,li,.swiper-slide,.page-item-detail,.c-tabs-item__content,.bsx,.utao,.manga-item,.manga-card,.series-item,.book-item,.item,[class*="card"]');
+    return backgroundFallback || anchor.closest('article,li,.swiper-slide,.page-item-detail,.c-tabs-item__content,.bsx,.utao,.manga-item,.manga-card,.series-item,.book-item,.item,[class*="card"]');
   };
   const chooseCover = (anchor, card) => {
     const candidates = [];
@@ -1037,8 +1039,12 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
       const bgNodes = [root, ...Array.from(root.querySelectorAll('[style*="background"],[data-background],[data-bg],[data-lazy-background],[data-bg-src]'))];
       for (const node of bgNodes) {
         const style = node.getAttribute('style') || '';
-        const match = /background(?:-image)?\\s*:\\s*url\\((?:['"])?([^'")]+)(?:['"])?\\)/i.exec(style);
-        addCandidate(match ? match[1] : '', 38, 'css background');
+        const match = /background(?:-image)?\s*:\s*url\((?:['"])?([^'")]+)(?:['"])?\)/i.exec(style);
+        addCandidate(match ? match[1] : '', 38, 'inline css background');
+        let computedBackground = '';
+        try { computedBackground = window.getComputedStyle(node).backgroundImage || ''; } catch(e) {}
+        const computedMatch = /url\((['"]?)(.*?)['"]?\)/i.exec(computedBackground);
+        if (computedMatch) addCandidate(computedMatch[2], 44, 'computed css background');
         for (const attr of ['data-background','data-bg','data-lazy-background','data-bg-src']) {
           addCandidate(node.getAttribute(attr), 42, attr);
         }
