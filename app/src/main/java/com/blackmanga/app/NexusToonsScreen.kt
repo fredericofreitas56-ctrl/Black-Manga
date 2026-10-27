@@ -80,6 +80,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     // Keep catalogue cards across page requests; page metadata may change without replacing the grid.
     var accumulatedCatalogEntries by remember(startUrl) { mutableStateOf<List<NexusEntry>>(emptyList()) }
     var hasMoreCatalogPages by remember(startUrl) { mutableStateOf(true) }
+    var appendingCatalogPage by remember { mutableStateOf(false) }
+    var catalogEntryCountBeforeAppend by remember { mutableStateOf(0) }
     var viewMode by remember(startUrl) {
         mutableStateOf(
             when {
@@ -121,6 +123,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         } else emptyList()
         if (saveHistory && currentUrl != destination) history = history + currentUrl
         scope.launch {
+            appendingCatalogPage = appendEntries && targetMode == "catalog"
+            catalogEntryCountBeforeAppend = previousEntries.size
             loading = true
             error = ""
             if (!appendEntries) {
@@ -716,7 +720,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 } else {
                                                     domFallbackLoading = false
                                                     needsDomFallback = false
-                                                    if (appendEntries && targetMode == "catalog") hasMoreCatalogPages = false
+                                                    if (appendingCatalogPage) {
+                                                        hasMoreCatalogPages = false
+                                                        appendingCatalogPage = false
+                                                    }
                                                     domFallbackMessage = "Não foi possível reconhecer o catálogo. Tenta novamente."
                                                 }
                                                 return@evaluateJavascript
@@ -831,8 +838,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             }
                                             val combinedEntries = mergedEntryMap.values.toList().take(5000)
                                             accumulatedCatalogEntries = combinedEntries
-                                            if (appendEntries && targetMode == "catalog") {
-                                                hasMoreCatalogPages = combinedEntries.size > previousEntries.size
+                                            if (appendingCatalogPage) {
+                                                hasMoreCatalogPages = combinedEntries.size > catalogEntryCountBeforeAppend
+                                                appendingCatalogPage = false
                                             }
                                             val combinedChapters = (oldPage?.chapters.orEmpty() + extractedChapters)
                                                 .distinctBy { it.url }.take(600)
