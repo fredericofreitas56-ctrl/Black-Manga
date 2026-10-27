@@ -906,7 +906,20 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     var extractionAttempts = 0
                                     val accumulatedDomEntries = linkedMapOf<String, NexusEntry>()
                                     fun extractDomWhenReady() {
-                                        if (web.url != finishedUrl) return
+                                        // Infinite-scroll scripts may update the URL with history.replaceState
+                                        // while keeping the same page alive. Do not abandon the scan because
+                                        // web.url no longer equals the original onPageFinished URL.
+                                        val activeWebUrl = web.url ?: finishedUrl
+                                        if (!NexusToonsAdapter.supports(activeWebUrl)) {
+                                            domFallbackLoading = false
+                                            needsDomFallback = false
+                                            if (appendingCatalogPage) {
+                                                appendingCatalogPage = false
+                                                loadingMoreCatalog = false
+                                            }
+                                            domFallbackMessage = "A extração foi interrompida porque o site saiu do NexusToons."
+                                            return
+                                        }
                                         extractionAttempts += 1
                                         web.evaluateJavascript(NEXUS_DOM_EXTRACTION_SCRIPT) { raw ->
                                             val payload = try {
