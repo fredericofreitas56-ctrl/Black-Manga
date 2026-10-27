@@ -706,8 +706,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 colors = CardDefaults.cardColors(containerColor = Color.Transparent)
                             ) {
                                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    val image = entry.imageUrl?.takeIf { it.isNotBlank() }
-                                        ?: resolvedCoverUrls[entry.url]
+                                    val image = sequenceOf(entry.imageUrl, resolvedCoverUrls[entry.url])
+                                        .filterNotNull()
+                                        .map { it.trim() }
+                                        .firstOrNull { it.isNotBlank() && it !in rejectedCoverUrls }
                                     LaunchedEffect(entry.url, image) {
                                         if (image.isNullOrBlank() &&
                                             entry.url !in resolvedCoverUrls &&
