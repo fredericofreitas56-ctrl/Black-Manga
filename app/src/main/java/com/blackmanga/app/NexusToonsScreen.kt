@@ -202,9 +202,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         currentCatalogPageUrl = directPage?.url ?: destination
                     }
                 }
+                val cursorBaseUrl = directPage?.url ?: destination
                 val nextCursor = (directPage?.nextPageUrl
-                    ?.takeIf { it != destination && NexusToonsAdapter.supports(it) }
-                    ?: NexusToonsAdapter.guessedNextPageUrl(destination))
+                    ?.takeIf { it != cursorBaseUrl && NexusToonsAdapter.supports(it) }
+                    ?: NexusToonsAdapter.guessedNextPageUrl(cursorBaseUrl))
                 if (targetMode == "catalog") {
                     if (!appendEntries) {
                         nextCatalogPageUrl = nextCursor
