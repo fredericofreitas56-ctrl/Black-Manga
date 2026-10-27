@@ -2,6 +2,8 @@ package com.blackmanga.app
 
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -50,6 +52,8 @@ internal object NexusToonsAdapter {
     private const val API_APP_KEY = "NxT_s3cur3_k3y_2026!xK9mPqL"
     private const val API_CRYPTO_SEED = "OrionNexus2025CryptoKey!Secure"
     private const val API_PAGE_SIZE = 500
+    // Limit concurrent detail-page requests so the source does not throttle cover lookups.
+    private val coverRequestSemaphore = Semaphore(permits = 3)
 
     private data class CryptoKey(
         val key: ByteArray,
@@ -267,56 +271,165 @@ internal object NexusToonsAdapter {
      * Resolve a series cover from its own public detail page. API catalogue records
      * include a title and slug but usually omit the cover URL.
      */
-    suspend fun fetchCoverForEntry(rawUrl: String): String? = withContext(Dispatchers.IO) {
-        if (!supports(rawUrl)) return@withContext null
-        val pageUrl = runCatching { URI(rawUrl) }.getOrNull() ?: return@withContext null
-        val document = runCatching {
-            Jsoup.connect(pageUrl.toASCIIString())
-                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
-                .header("Referer", "https://nexustoons.com/")
-                .timeout(12000)
-                .followRedirects(true)
-                .get()
-        }.getOrNull() ?: return@withContext null
+    suspend fun fetchCoverForEntry(rawUrl: String): String? =
+        coverRequestSemaphore.withPermit {
+            withContext(Dispatchers.IO) {
+                if (!supports(rawUrl)) return@withContext null
+                val pageUrl = runCatching { URI(rawUrl) }.getOrNull() ?: return@withContext null
+                val document = runCatching {
+                    Jsoup.connect(pageUrl.toASCIIString())
+                        .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                        .header("Referer", "https://nexustoons.com/biblioteca")
+                        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+                        .header("Accept-Language", "pt-PT,pt;q=0.9,en;q=0.8")
+                        .timeout(18000)
+                        .followRedirects(true)
+                        .ignoreHttpErrors(true)
+                        .get()
+                }.getOrNull() ?: return@withContext null
 
-        fun candidate(raw: String, base: String): String? {
-            val value = raw.trim().removeSurrounding("\"").removeSurrounding("'")
-            if (value.isBlank() || value.startsWith("data:", true) || value.startsWith("blob:", true)) return null
-            val url = runCatching { URI(base).resolve(URI(value)).toString() }.getOrNull() ?: return null
-            if (!url.startsWith("https://", true)) return null
-            val lower = url.lowercase()
-            if (listOf("placeholder", "blank.gif", "spacer", "transparent", "/logo", "avatar", "favicon", "sprite", "mascot", "emoji", "banner").any { lower.contains(it) }) return null
-            return url
+                data class Candidate(val score: Int, val url: String)
+                val candidates = mutableListOf<Candidate>()
+
+                fun candidate(raw: String, base: String): String? {
+                    val value = raw.trim()
+                        .removeSurrounding("\"")
+                        .removeSurrounding("'")
+                        .replace("\\/", "/")
+                        .replace("&amp;", "&")
+                    if (value.isBlank() ||
+                        value.startsWith("data:", true) ||
+                        value.startsWith("blob:", true) ||
+                        value.startsWith("javascript:", true)
+                    ) return null
+                    val url = runCatching {
+                        when {
+                            value.startsWith("//") -> "https:$value"
+                            value.startsWith("https://", true) -> URI(value).toString()
+                            value.startsWith("http://", true) ->
+                                URI(value).toString().replaceFirst("http://", "https://", true)
+                            else -> URI(base).resolve(URI(value)).toString()
+                        }
+                    }.getOrNull() ?: return null
+                    if (!url.startsWith("https://", true)) return null
+                    val uri = runCatching { URI(url) }.getOrNull() ?: return null
+                    val lower = uri.path.orEmpty().lowercase()
+                    if (listOf(
+                            "placeholder", "blank.gif", "spacer", "transparent",
+                            "/logo", "avatar", "favicon", "sprite", "mascot", "emoji"
+                        ).any { lower.contains(it) }
+                    ) return null
+                    if (uri.host.isNullOrBlank() || uri.host.equals(HOST, true) &&
+                        lower in listOf("/favicon.ico", "/logo.svg", "/logo.png")
+                    ) return null
+                    return url
+                }
+
+                fun add(raw: String?, base: String, score: Int, context: String = "") {
+                    if (raw.isNullOrBlank()) return
+                    val url = candidate(raw, base) ?: return
+                    val lowerContext = context.lowercase()
+                    val finalScore = score +
+                        (if (listOf("cover", "poster", "thumbnail", "thumb", "wp-post-image", "featured", "manga-image")
+                                .any { lowerContext.contains(it) }) 50 else 0) +
+                        (if (listOf("logo", "avatar", "icon", "banner", "profile", "emoji", "sprite")
+                                .any { lowerContext.contains(it) }) -100 else 0) +
+                        (if (Regex("\\.(jpg|jpeg|png|webp|avif)(?:$|\\?)", RegexOption.IGNORE_CASE)
+                                .containsMatchIn(url)) 12 else 0)
+                    candidates.add(Candidate(finalScore, url))
+                }
+
+                // Metadata is normally the best cover fallback on modern series pages.
+                listOf(
+                    "meta[property=og:image]",
+                    "meta[property=og:image:secure_url]",
+                    "meta[name=twitter:image]",
+                    "meta[name=twitter:image:src]",
+                    "meta[itemprop=image]"
+                ).forEachIndexed { index, selector ->
+                    val meta = document.selectFirst(selector) ?: return@forEachIndexed
+                    add(meta.attr("content"), document.baseUri(), 150 - index * 3, selector)
+                }
+
+                // Prefer cover-specific areas before general page images.
+                val imageSelector = listOf(
+                    ".summary_image img", ".summary_image source",
+                    ".manga-cover img", ".manga-cover source",
+                    ".book-cover img", ".book-cover source",
+                    ".cover img", ".cover source", "[class*=cover] img", "[class*=cover] source",
+                    "[class*=poster] img", "[class*=thumbnail] img", ".wp-post-image",
+                    ".entry-image img", ".featured-image img", ".thumb img", ".media img",
+                    "main img", "article img", "img", "picture source",
+                    "[style*=background-image]", "[data-bg]", "[data-background]"
+                ).joinToString(",")
+                document.select(imageSelector).forEachIndexed { index, node ->
+                    val context = buildString {
+                        append(node.className()).append(' ').append(node.id()).append(' ')
+                        append(node.attr("alt")).append(' ').append(node.attr("title")).append(' ')
+                        node.parents().take(4).forEach { append(it.className()).append(' ').append(it.id()).append(' ') }
+                    }
+                    val weight = when {
+                        context.contains("summary_image", true) -> 130
+                        listOf("cover", "poster", "wp-post-image", "thumbnail", "featured-image")
+                            .any { context.contains(it, true) } -> 115
+                        else -> 45 - minOf(index, 35)
+                    }
+                    val base = node.baseUri().ifBlank { document.baseUri() }
+                    val attributes = listOf(
+                        "data-src", "data-lazy-src", "data-original", "data-original-src",
+                        "data-lazyload", "data-lazy", "data-ks-lazyload",
+                        "data-cfsrc", "data-echo", "data-cover", "data-image",
+                        "data-thumb", "data-thumbnail", "data-url", "data-bg", "data-background",
+                        "data-lazy-srcset", "data-srcset", "srcset", "src"
+                    )
+                    attributes.forEachIndexed { attrIndex, attr ->
+                        val value = node.attr(attr).trim()
+                        if (value.isBlank()) return@forEachIndexed
+                        if (attr.contains("srcset")) {
+                            value.split(",").forEach { part ->
+                                val pieces = part.trim().split(Regex("\\s+"))
+                                val sourceUrl = pieces.firstOrNull().orEmpty()
+                                val descriptor = pieces.getOrNull(1).orEmpty()
+                                val descriptorScore = Regex("(\\d+)w").find(descriptor)
+                                    ?.groupValues?.getOrNull(1)?.toIntOrNull()?.div(100) ?: 0
+                                add(sourceUrl, base, weight + (attributes.size - attrIndex) * 2 + descriptorScore, context)
+                            }
+                        } else {
+                            add(value, base, weight + (attributes.size - attrIndex) * 2, context)
+                        }
+                    }
+                    val style = node.attr("style")
+                    Regex("""url\((?:['"])?(.*?)(?:['"])?\)""", RegexOption.IGNORE_CASE)
+                        .findAll(style)
+                        .forEach { add(it.groupValues[1], base, weight + 10, "$context background") }
+                }
+
+                // Some Next/React pages put the thumbnail only in JSON or hydration scripts.
+                val imageProperty = Regex(
+                    """(?i)["']?(?:cover|coverUrl|cover_url|image|imageUrl|image_url|thumbnail|thumbnailUrl|poster|featuredImage)["']?\s*:\s*["']([^"']+)["']"""
+                )
+                val escapedUrl = Regex(
+                    """https?:\\?/\\?/[^"'\\s<>]+?\.(?:jpe?g|png|webp|avif)(?:\?[^"'\\s<>]*)?""",
+                    RegexOption.IGNORE_CASE
+                )
+                document.select("script").forEach { script ->
+                    val source = (if (script.data().isNotBlank()) script.data() else script.html())
+                        .replace("\\/", "/")
+                    imageProperty.findAll(source).forEach { match ->
+                        add(match.groupValues[1], document.baseUri(), 95, "script image field")
+                    }
+                    escapedUrl.findAll(source).forEach { match ->
+                        add(match.value, document.baseUri(), 35, "script image URL")
+                    }
+                }
+
+                candidates
+                    .distinctBy { it.url }
+                    .sortedByDescending { it.score }
+                    .firstOrNull()
+                    ?.url
+            }
         }
-
-        val imageNodes = document.select(
-            ".summary_image img,.summary_image a img,.manga-cover img,.cover img,[class*=cover] img," +
-                "[class*=poster] img,[class*=thumbnail] img,.thumb img,.media img,article img,main img,img"
-        )
-        for (img in imageNodes) {
-            val raw = listOf(
-                "data-src", "data-lazy-src", "data-original", "data-lazyload",
-                "data-cover", "data-image", "data-srcset", "srcset", "src"
-            ).firstNotNullOfOrNull { attr ->
-                val value = img.attr(attr).trim()
-                if (value.isBlank()) null else if (attr.contains("srcset")) {
-                    value.split(",").lastOrNull()?.trim()?.split(Regex("\\s+"))?.firstOrNull()
-                } else value
-            } ?: continue
-            val classes = (img.className() + " " + img.id() + " " + img.attr("alt")).lowercase()
-            if (listOf("avatar", "logo", "icon", "emoji", "sprite", "mascot", "banner", "profile").any { classes.contains(it) }) continue
-            candidate(raw, img.baseUri())?.let { return@withContext it }
-        }
-
-        val meta = listOf(
-            "meta[property=og:image]", "meta[property=og:image:secure_url]",
-            "meta[name=twitter:image]", "meta[name=twitter:image:src]"
-        ).firstNotNullOfOrNull { selector ->
-            document.selectFirst(selector)?.attr("content")?.takeIf { it.isNotBlank() }
-        }
-        meta?.let { candidate(it, document.baseUri()) }
-    }
-
     /**
      * Fetch a single batch and accept it only when it contains titles not already visible.
      * The caller keeps the current grid in place.
