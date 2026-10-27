@@ -117,7 +117,42 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     var page by remember { mutableStateOf<NexusPage?>(null) }
     // Keep catalogue cards across page requests; page metadata may change without replacing the grid.
     var accumulatedCatalogEntries by remember(startUrl) { mutableStateOf<List<NexusEntry>>(emptyList()) }
-    var resolvedCoverUrls by remember(startUrl) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // Keep discovered cover URLs on-device so leaving and reopening the catalogue does not
+    // throw away successful lookups. Cache only URLs; Compose/Coil still reloads the images.
+    val coverCachePreferences = remember(imageContext) {
+        imageContext.getSharedPreferences("nexus_toons_cover_cache", android.content.Context.MODE_PRIVATE)
+    }
+    var resolvedCoverUrls by remember(startUrl) {
+        mutableStateOf(
+            runCatching {
+                val saved = coverCachePreferences.getString("resolved_covers_v1", null)
+                if (saved.isNullOrBlank()) emptyMap() else {
+                    val json = JSONObject(saved)
+                    buildMap {
+                        val keys = json.keys()
+                        while (keys.hasNext()) {
+                            val key = keys.next()
+                            val value = json.optString(key)
+                            if (key.isNotBlank() && value.startsWith("https://")) put(key, value)
+                        }
+                    }
+                }
+            }.getOrDefault(emptyMap())
+        )
+    }
+    LaunchedEffect(resolvedCoverUrls) {
+        // Do not overwrite a previously populated cache when load() temporarily clears
+        // the in-memory map while navigating/reloading a catalogue.
+        if (resolvedCoverUrls.isNotEmpty()) {
+            runCatching {
+                val json = JSONObject()
+                resolvedCoverUrls.forEach { (key, value) ->
+                    if (key.isNotBlank() && value.startsWith("https://")) json.put(key, value)
+                }
+                coverCachePreferences.edit().putString("resolved_covers_v1", json.toString()).apply()
+            }
+        }
+    }
     var rejectedCoverUrls by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
     var coverLookupFailures by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
     var coverLookupsInProgress by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
