@@ -1331,7 +1331,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     const visited = new Set();
     for (const root of roots) {
       if (!root || !root.querySelectorAll) continue;
-      const nodes = [root, ...Array.from(root.querySelectorAll('*')).slice(0, 180)];
+      const nodes = [root, ...Array.from(root.querySelectorAll('*')).slice(0, 1000)];
       for (const node of nodes) {
         if (visited.has(node)) continue;
         visited.add(node);
