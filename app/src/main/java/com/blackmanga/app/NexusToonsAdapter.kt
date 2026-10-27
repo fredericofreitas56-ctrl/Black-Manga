@@ -57,7 +57,8 @@ internal object NexusToonsAdapter {
         "politica", "termos", "ranking", "notificacoes", "notifications",
         "novels", "obras", "catalogo", "explorar", "loja", "biblioteca",
         "niveis", "níveis", "conquistas", "comunidade", "comunidades", "cart",
-        "app", "download", "downloads", "sobre", "ajuda", "faq", "conta", "perfil"
+        "app", "download", "downloads", "sobre", "ajuda", "faq", "conta", "perfil",
+        "page", "pagina", "pages", "pagination", "next", "previous", "prev"
     )
 
     private val catalogueRoutes = setOf(
@@ -339,6 +340,7 @@ internal object NexusToonsAdapter {
                 val heading = card?.let { meaningfulHeading(it) }
                 val title = sequenceOf(
                     heading.orEmpty(),
+                    titleForAnchor(anchor),
                     cleaned(anchor.attr("title")),
                     cleaned(anchor.attr("aria-label")),
                     cleaned(anchor.selectFirst("img")?.attr("alt")),
