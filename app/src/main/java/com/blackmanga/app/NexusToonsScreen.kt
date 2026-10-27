@@ -159,15 +159,40 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             }
 
             try {
+                val requestedApiPage = Regex("[?&]blackmanga_api_page=(\\d+)", RegexOption.IGNORE_CASE)
+                    .find(destination)?.groupValues?.getOrNull(1)?.toIntOrNull()
                 val directPage: NexusPage? = try {
-                    if (appendEntries && targetMode == "catalog") {
-                        NexusToonsAdapter.loadNextCataloguePage(
-                            currentPageUrl = sourcePageForAppend,
-                            preferredNextUrl = destination,
-                            existingEntryUrls = previousEntryUrls
-                        )
-                    } else {
-                        NexusToonsAdapter.load(destination)
+                    when {
+                        appendEntries && targetMode == "catalog" ->
+                            NexusToonsAdapter.loadNextCataloguePage(
+                                currentPageUrl = sourcePageForAppend,
+                                preferredNextUrl = destination,
+                                existingEntryUrls = previousEntryUrls
+                            )
+                        targetMode == "catalog" -> {
+                            val apiPage = NexusToonsAdapter.loadApiCataloguePage(requestedApiPage ?: 1)
+                            if (apiPage != null) {
+                                val visualPage = runCatching {
+                                    NexusToonsAdapter.load("https://nexustoons.com/biblioteca", timeoutMs = 10000)
+                                }.getOrNull()
+                                if (visualPage == null) apiPage else {
+                                    val visualByUrl = visualPage.entries.associateBy { it.url.trimEnd('/').lowercase() }
+                                    apiPage.copy(entries = apiPage.entries.map { entry ->
+                                        val visual = visualByUrl[entry.url.trimEnd('/').lowercase()]
+                                        if (visual == null) entry else entry.copy(
+                                            imageUrl = visual.imageUrl?.takeIf { it.isNotBlank() } ?: entry.imageUrl,
+                                            description = entry.description.ifBlank { visual.description },
+                                            kind = entry.kind.ifBlank { visual.kind },
+                                            status = entry.status.ifBlank { visual.status },
+                                            rating = entry.rating.ifBlank { visual.rating },
+                                            chapterCount = entry.chapterCount.ifBlank { visual.chapterCount },
+                                            genres = (entry.genres + visual.genres).distinct()
+                                        )
+                                    }, genres = visualPage.genres)
+                                }
+                            } else NexusToonsAdapter.load(destination)
+                        }
+                        else -> NexusToonsAdapter.load(destination)
                     }
                 } catch (_: Exception) {
                     null
@@ -258,7 +283,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 // Load-more must behave like the MangaDex grid: append the HTML-parser
                 // batch immediately. Do not navigate the hidden WebView just because some
                 // covers are missing; that caused the whole source page to reload on every click.
+                val hasApiCatalogBatch = targetMode == "catalog" &&
+                    directPage?.url.orEmpty().contains("blackmanga_api_page=")
                 val needsExtraction = when {
+                    hasApiCatalogBatch -> false
                     // Never mount/reload WebView just to fetch another catalogue page.
                     appendEntries && targetMode == "catalog" -> false
                     targetMode == "reader" -> result.readerImages.isEmpty()
