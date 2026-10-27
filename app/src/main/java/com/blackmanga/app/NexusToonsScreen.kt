@@ -75,6 +75,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     val paleCard = Color(0xFFFFEEE6)
 
     var currentUrl by remember(startUrl) { mutableStateOf(NexusToonsAdapter.normalizeCatalogueStart(startUrl)) }
+    var currentCatalogPageUrl by remember(startUrl) { mutableStateOf(NexusToonsAdapter.normalizeCatalogueStart(startUrl)) }
     var history by remember(startUrl) { mutableStateOf(emptyList<String>()) }
     var page by remember { mutableStateOf<NexusPage?>(null) }
     // Keep catalogue cards across page requests; page metadata may change without replacing the grid.
@@ -121,9 +122,11 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             else -> "detail"
         }
         val previousPage = if (appendEntries) page else null
+        val sourcePageForAppend = if (appendEntries) currentCatalogPageUrl else destination
         val previousEntries = if (appendEntries) {
             accumulatedCatalogEntries.ifEmpty { previousPage?.entries.orEmpty() }
         } else emptyList()
+        val previousEntryUrls = previousEntries.mapTo(linkedSetOf()) { it.url }
         if (saveHistory && !appendEntries && currentUrl != destination) history = history + currentUrl
         scope.launch {
             appendingCatalogPage = appendEntries && targetMode == "catalog"
@@ -138,6 +141,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 page = null
                 accumulatedCatalogEntries = emptyList()
                 nextCatalogPageUrl = null
+                currentCatalogPageUrl = destination
                 hasMoreCatalogPages = true
                 readerImages = emptyList()
                 if (targetMode != "reader") readerTitle = ""
@@ -156,7 +160,15 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
 
             try {
                 val directPage: NexusPage? = try {
-                    NexusToonsAdapter.load(destination)
+                    if (appendEntries && targetMode == "catalog") {
+                        NexusToonsAdapter.loadNextCataloguePage(
+                            currentPageUrl = sourcePageForAppend,
+                            preferredNextUrl = destination,
+                            existingEntryUrls = previousEntryUrls
+                        )
+                    } else {
+                        NexusToonsAdapter.load(destination)
+                    }
                 } catch (_: Exception) {
                     null
                 }
@@ -183,6 +195,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 val mergedEntries = (previousEntries + freshEntries)
                     .distinctBy { it.url }.take(5000)
                 accumulatedCatalogEntries = mergedEntries
+                if (targetMode == "catalog") {
+                    if (!appendEntries) {
+                        currentCatalogPageUrl = directPage?.url ?: universalPage?.url ?: destination
+                    } else if (freshEntries.any { it.url !in previousEntryUrls }) {
+                        currentCatalogPageUrl = directPage?.url ?: destination
+                    }
+                }
                 val nextCursor = (directPage?.nextPageUrl
                     ?.takeIf { it != destination && NexusToonsAdapter.supports(it) }
                     ?: NexusToonsAdapter.guessedNextPageUrl(destination))
