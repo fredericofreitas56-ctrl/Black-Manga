@@ -64,6 +64,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private fun nexusCatalogEntryKey(rawUrl: String): String =
+    rawUrl.trim().substringBefore("#").substringBefore("?")
+        .replace("https://www.", "https://", ignoreCase = true)
+        .replace("http://www.", "https://", ignoreCase = true)
+        .replace("http://", "https://", ignoreCase = true)
+        .trimEnd("/")
+        .lowercase()
+
 @Composable
 internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
@@ -180,9 +188,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     NexusToonsAdapter.load("https://nexustoons.com/biblioteca", timeoutMs = 10000)
                                 }.getOrNull()
                                 if (visualPage == null) apiPage else {
-                                    val visualByUrl = visualPage.entries.associateBy { it.url.trimEnd('/').lowercase() }
+                                    val visualByUrl = visualPage.entries.associateBy { nexusCatalogEntryKey(it.url) }
                                     apiPage.copy(entries = apiPage.entries.map { entry ->
-                                        val visual = visualByUrl[entry.url.trimEnd('/').lowercase()]
+                                        val visual = visualByUrl[nexusCatalogEntryKey(entry.url)]
                                         if (visual == null) entry else entry.copy(
                                             imageUrl = visual.imageUrl?.takeIf { it.isNotBlank() } ?: entry.imageUrl,
                                             description = entry.description.ifBlank { visual.description },
@@ -933,11 +941,12 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             }
                                             val domEntries = accumulatedDomEntries.values.toList()
                                             val previewByUrl = linkedMapOf<String, NexusEntry>()
-                                            accumulatedCatalogEntries.forEach { previewByUrl[it.url] = it }
-                                            page?.entries.orEmpty().forEach { previewByUrl[it.url] = it }
+                                            accumulatedCatalogEntries.forEach { previewByUrl[nexusCatalogEntryKey(it.url)] = it }
+                                            page?.entries.orEmpty().forEach { previewByUrl[nexusCatalogEntryKey(it.url)] = it }
                                             domEntries.forEach { fresh ->
-                                                val old = previewByUrl[fresh.url]
-                                                previewByUrl[fresh.url] = if (old == null) fresh else old.copy(
+                                                val key = nexusCatalogEntryKey(fresh.url)
+                                                val old = previewByUrl[key]
+                                                previewByUrl[key] = if (old == null) fresh else old.copy(
                                                     imageUrl = fresh.imageUrl?.takeIf { it.isNotBlank() } ?: old.imageUrl,
                                                     description = old.description.ifBlank { fresh.description },
                                                     kind = old.kind.ifBlank { fresh.kind },
@@ -964,11 +973,12 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
 
                                             val oldPage = page
                                             val mergedEntryMap = linkedMapOf<String, NexusEntry>()
-                                            accumulatedCatalogEntries.forEach { mergedEntryMap[it.url] = it }
-                                            oldPage?.entries.orEmpty().forEach { mergedEntryMap[it.url] = it }
+                                            accumulatedCatalogEntries.forEach { mergedEntryMap[nexusCatalogEntryKey(it.url)] = it }
+                                            oldPage?.entries.orEmpty().forEach { mergedEntryMap[nexusCatalogEntryKey(it.url)] = it }
                                             domEntries.forEach { fresh ->
-                                                val old = mergedEntryMap[fresh.url]
-                                                mergedEntryMap[fresh.url] = when {
+                                                val key = nexusCatalogEntryKey(fresh.url)
+                                                val old = mergedEntryMap[key]
+                                                mergedEntryMap[key] = when {
                                                     old == null -> fresh
                                                     !fresh.imageUrl.isNullOrBlank() && fresh.imageUrl != old.imageUrl ->
                                                         fresh.copy(title = old.title.ifBlank { fresh.title },
