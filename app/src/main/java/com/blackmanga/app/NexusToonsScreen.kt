@@ -77,6 +77,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     var currentUrl by remember(startUrl) { mutableStateOf(NexusToonsAdapter.normalizeCatalogueStart(startUrl)) }
     var history by remember(startUrl) { mutableStateOf(emptyList<String>()) }
     var page by remember { mutableStateOf<NexusPage?>(null) }
+    // Keep catalogue cards across page requests; page metadata may change without replacing the grid.
+    var accumulatedCatalogEntries by remember(startUrl) { mutableStateOf<List<NexusEntry>>(emptyList()) }
     var viewMode by remember(startUrl) {
         mutableStateOf(
             when {
@@ -113,18 +115,24 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             else -> "detail"
         }
         val previousPage = if (appendEntries) page else null
+        val previousEntries = if (appendEntries) {
+            accumulatedCatalogEntries.ifEmpty { previousPage?.entries.orEmpty() }
+        } else emptyList()
         if (saveHistory && currentUrl != destination) history = history + currentUrl
         scope.launch {
             loading = true
             error = ""
-            filter = ""
-            typeFilter = "Todos"
-            fallbackGenre = "Todos"
-            page = null
-            selectedChapterUrl = null
-            selectedChapterTitle = ""
-            readerImages = emptyList()
-            if (targetMode != "reader") readerTitle = ""
+            if (!appendEntries) {
+                filter = ""
+                typeFilter = "Todos"
+                fallbackGenre = "Todos"
+                page = null
+                accumulatedCatalogEntries = emptyList()
+                readerImages = emptyList()
+                if (targetMode != "reader") readerTitle = ""
+                selectedChapterUrl = null
+                selectedChapterTitle = ""
+            }
             needsDomFallback = false
             domFallbackLoading = false
             domFallbackMessage = ""
@@ -158,8 +166,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                             NexusEntry(entry.title, entry.url, entry.imageUrl, entry.description)
                         }
                     ).distinctBy { it.url }
-                val mergedEntries = (previousPage?.entries.orEmpty() + freshEntries)
+                val mergedEntries = (previousEntries + freshEntries)
                     .distinctBy { it.url }.take(500)
+                accumulatedCatalogEntries = mergedEntries
                 val mergedChapters = directPage?.chapters.orEmpty().distinctBy { it.url }.take(600)
                 val mergedImages = (directPage?.readerImages.orEmpty() + universalPage?.readerImages.orEmpty())
                     .distinct().take(150)
@@ -207,10 +216,11 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 page = NexusPage(
                     title = selectedWork?.title ?: "Nexus Toons",
                     url = destination,
-                    entries = previousPage?.entries.orEmpty(),
+                    entries = previousEntries,
                     readerImages = emptyList(),
                     chapters = emptyList()
                 )
+                accumulatedCatalogEntries = previousEntries
                 needsDomFallback = true
                 domFallbackLoading = true
             } finally {
@@ -554,19 +564,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     // Não ocultar capas quando dois cartões partilham o mesmo URL.
 
                     Text(
-                        visibleEntries.size.toString() + " títulos",
+                        if (filter.isNotBlank() || typeFilter != "Todos" || fallbackGenre != "Todos")
+                            "${visibleEntries.size} títulos visíveis · ${loaded.entries.size} carregados"
+                        else "${loaded.entries.size} títulos carregados",
                         Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                         color = muted,
                         fontSize = 12.sp
                     )
-                    if (viewMode == "catalog" && domFallbackMessage.startsWith("DIAGNÓSTICO CAPAS:") && !domFallbackLoading) {
-                        Text(
-                            domFallbackMessage,
-                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 3.dp),
-                            color = Color(0xFFB53C32),
-                            fontSize = 10.sp
-                        )
-                    }
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(4),
                         modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -648,14 +652,6 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             page?.entries.isNullOrEmpty() && page?.chapters.isNullOrEmpty() && readerImages.isEmpty()) {
             Text(domFallbackMessage, Modifier.padding(10.dp), color = muted, fontSize = 12.sp)
             TextButton(onClick = { load(currentUrl, false) }) { Text("Tentar novamente", color = accent) }
-        }
-        if (viewMode == "catalog" && domFallbackMessage.startsWith("DIAGNÓSTICO CAPAS:") && !domFallbackLoading) {
-            Text(
-                domFallbackMessage,
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                color = muted,
-                fontSize = 10.sp
-            )
         }
         }
 
@@ -770,6 +766,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             }
                                             val domEntries = accumulatedDomEntries.values.toList()
                                             val previewByUrl = linkedMapOf<String, NexusEntry>()
+                                            accumulatedCatalogEntries.forEach { previewByUrl[it.url] = it }
                                             page?.entries.orEmpty().forEach { previewByUrl[it.url] = it }
                                             domEntries.forEach { fresh ->
                                                 val old = previewByUrl[fresh.url]
@@ -800,6 +797,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
 
                                             val oldPage = page
                                             val mergedEntryMap = linkedMapOf<String, NexusEntry>()
+                                            accumulatedCatalogEntries.forEach { mergedEntryMap[it.url] = it }
                                             oldPage?.entries.orEmpty().forEach { mergedEntryMap[it.url] = it }
                                             domEntries.forEach { fresh ->
                                                 val old = mergedEntryMap[fresh.url]
@@ -820,6 +818,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 }
                                             }
                                             val combinedEntries = mergedEntryMap.values.toList().take(500)
+                                            accumulatedCatalogEntries = combinedEntries
                                             val combinedChapters = (oldPage?.chapters.orEmpty() + extractedChapters)
                                                 .distinctBy { it.url }.take(600)
                                             val combinedImages = (extractedImages + oldPage?.readerImages.orEmpty()).distinct().take(150)
@@ -952,7 +951,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     /\/(page|pagina)\/\d+$/.test(currentPath) ||
     /(?:^|&)(?:page|paged)=\d+/i.test(location.search.slice(1));
   const isReader = /^\/r\//.test(location.pathname) ||
-    /\/(capitulo|chapter|leitura|reader|read|episode|episodio|page|pagina)\//i.test(location.pathname) ||
+    /\/(capitulo|chapter|leitura|reader|read|episode|episodio)\//i.test(location.pathname) ||
     /cap[ií]tulo|chapter|leitura|reader|epis[oó]dio/i.test(location.pathname);
   const sameSite = url => url && url.protocol === 'https:' && hostAllowed(url.hostname);
   const urlOf = anchor => {
