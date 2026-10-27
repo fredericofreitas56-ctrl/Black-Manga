@@ -144,18 +144,32 @@ internal object NexusToonsAdapter {
         val baseHost = baseUri.host.orEmpty().lowercase()
         val pageUrl = document.baseUri().ifBlank { uri.toASCIIString() }
 
+        fun resolveImageCandidate(rawValue: String, base: String): String? {
+            val raw = rawValue.trim().trim('"', '\\'')
+            if (raw.isBlank() || raw.startsWith("data:", true) || raw.startsWith("blob:", true)) return null
+            val resolved = runCatching { URI(base).resolve(URI(raw)).toString() }.getOrNull() ?: return null
+            if (!resolved.startsWith("https://", true)) return null
+            val lower = resolved.lowercase()
+            if (listOf(
+                    "placeholder", "blank.gif", "spacer", "transparent", "data:image",
+                    "avatar", "favicon", "emoji", "sprite", "mascot", "/logo", "profile"
+                ).any { lower.contains(it) }) return null
+            return resolved
+        }
+
         fun absoluteImage(img: Element?): String? {
             if (img == null) return null
             val classes = (img.className() + " " + img.id() + " " + img.attr("alt")).lowercase()
             if (listOf("avatar", "profile", "user-icon", "emoji", "favicon", "sprite", "mascot", "placeholder")
                     .any { classes.contains(it) }) return null
 
-            // Sites often leave a transparent pixel in src and keep the real cover in
-            // a lazy-loading attribute. Prefer those attributes and choose the largest
-            // candidate from srcset instead of accidentally selecting its smallest image.
+            // Sites often put covers in lazy-load attributes, a picture/source element,
+            // or a CSS background instead of the normal img[src].
             val candidates = listOf(
-                "data-src", "data-lazy-src", "data-original", "data-lazyload",
-                "data-url", "data-image", "data-cfsrc", "data-echo",
+                "data-src", "data-lazy-src", "data-original", "data-original-src",
+                "data-lazyload", "data-lazy", "data-url", "data-image", "data-cover",
+                "data-thumb", "data-thumbnail", "data-cfsrc", "data-echo",
+                "data-ks-lazyload", "data-bg", "data-background",
                 "data-srcset", "data-lazy-srcset", "srcset", "src"
             ).flatMap { attr ->
                 val value = img.attr(attr).trim()
@@ -166,24 +180,38 @@ internal object NexusToonsAdapter {
                 } else listOf(value)
             }.distinct()
 
-            return candidates.asSequence().mapNotNull { raw ->
-                try {
-                    URI(img.baseUri()).resolve(URI(raw)).toString()
-                } catch (_: Exception) {
-                    img.absUrl("src").takeIf { it.isNotBlank() }
-                }
-            }.firstOrNull { candidate ->
-                candidate.startsWith("https://", true) &&
-                    !candidate.contains("data:image", true) &&
-                    !candidate.contains("placeholder", true) &&
-                    !candidate.contains("blank.gif", true) &&
-                    !candidate.contains("spacer", true) &&
-                    run {
-                        val lower = candidate.lowercase()
-                        !listOf("logo", "avatar", "favicon", "emoji", "sprite", "mascot", "placeholder", "profile")
-                            .any { marker -> lower.contains(marker) }
-                    }
+            return candidates.asSequence()
+                .mapNotNull { resolveImageCandidate(it, img.baseUri()) }
+                .firstOrNull()
+        }
+
+        fun imageFromElement(element: Element?): String? {
+            if (element == null) return null
+            if (element.normalName() == "img") return absoluteImage(element)
+            val classes = (element.className() + " " + element.id() + " " + element.attr("alt")).lowercase()
+            if (listOf("avatar", "profile", "emoji", "favicon", "sprite", "mascot", "placeholder")
+                    .any { classes.contains(it) }) return null
+
+            val attrs = listOf(
+                "data-src", "data-lazy-src", "data-original", "data-original-src", "data-url",
+                "data-image", "data-cover", "data-thumb", "data-thumbnail", "data-bg",
+                "data-background", "data-srcset", "srcset", "src"
+            )
+            val attrCandidates = attrs.flatMap { attr ->
+                val value = element.attr(attr).trim()
+                if (value.isBlank()) emptyList() else if (attr.contains("srcset")) {
+                    value.split(",").mapNotNull { part ->
+                        part.trim().split(Regex("\\s+")).firstOrNull()?.takeIf { it.isNotBlank() }
+                    }.reversed()
+                } else listOf(value)
             }
+            val cssCandidates = Regex("""url\\((?:['"])?(.*?)(?:['"])?\\)""", RegexOption.IGNORE_CASE)
+                .findAll(element.attr("style"))
+                .map { it.groupValues[1].trim() }
+                .toList()
+            return (attrCandidates + cssCandidates).asSequence()
+                .mapNotNull { resolveImageCandidate(it, element.baseUri()) }
+                .firstOrNull()
         }
 
         fun cleaned(value: String?): String =
@@ -203,18 +231,23 @@ internal object NexusToonsAdapter {
         }
 
         fun imageFromCard(anchor: Element, card: Element?): String? {
-            val candidates = (anchor.select("img").toList() + card?.select("img").orEmpty())
+            val selector = "img,source,[style*=background],[data-bg],[data-background],[data-cover],[data-thumb],[data-thumbnail]"
+            val candidates = (anchor.select(selector).toList() + card?.select(selector).orEmpty() + listOfNotNull(anchor, card))
                 .distinctBy { it.outerHtml() }
-            return candidates.mapNotNull { img ->
-                val url = absoluteImage(img) ?: return@mapNotNull null
-                val classes = (img.className() + " " + img.id()).lowercase()
+            return candidates.mapNotNull { element ->
+                val url = imageFromElement(element) ?: return@mapNotNull null
+                val classes = (element.className() + " " + element.id() + " " + element.attr("alt")).lowercase()
                 var score = 0
-                if (classes.contains("cover") || classes.contains("thumb") || classes.contains("poster")) score += 50
-                if (classes.contains("manga") || classes.contains("comic") || classes.contains("book")) score += 35
-                if (img.attr("alt").isNotBlank()) score += 8
-                if ((img.attr("width").toIntOrNull() ?: 0) >= 100) score += 12
-                if ((img.attr("height").toIntOrNull() ?: 0) >= 150) score += 12
-                if (listOf("logo", "avatar", "icon", "emoji", "profile", "mascot").any { classes.contains(it) || url.contains(it, true) }) score -= 100
+                if (classes.contains("cover") || classes.contains("thumb") || classes.contains("poster") ||
+                    classes.contains("thumbnail") || classes.contains("featured-image")) score += 70
+                if (classes.contains("manga") || classes.contains("comic") || classes.contains("book") ||
+                    classes.contains("manhwa") || classes.contains("series")) score += 35
+                if (element.attr("alt").isNotBlank()) score += 8
+                if ((element.attr("width").toIntOrNull() ?: 0) >= 100) score += 12
+                if ((element.attr("height").toIntOrNull() ?: 0) >= 150) score += 12
+                if (listOf("logo", "avatar", "icon", "emoji", "profile", "mascot", "banner").any {
+                        classes.contains(it) || url.contains(it, true)
+                    }) score -= 100
                 score to url
             }.maxByOrNull { it.first }?.second
         }
