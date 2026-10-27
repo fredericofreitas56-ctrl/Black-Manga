@@ -80,6 +80,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     var page by remember { mutableStateOf<NexusPage?>(null) }
     // Keep catalogue cards across page requests; page metadata may change without replacing the grid.
     var accumulatedCatalogEntries by remember(startUrl) { mutableStateOf<List<NexusEntry>>(emptyList()) }
+    var resolvedCoverUrls by remember(startUrl) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var coverLookupsInProgress by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
     // The screen URL stays on the first catalogue page; this cursor advances independently.
     var nextCatalogPageUrl by remember(startUrl) { mutableStateOf<String?>(null) }
     var hasMoreCatalogPages by remember(startUrl) { mutableStateOf(true) }
@@ -140,6 +142,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 fallbackGenre = "Todos"
                 page = null
                 accumulatedCatalogEntries = emptyList()
+                resolvedCoverUrls = emptyMap()
+                coverLookupsInProgress = emptySet()
                 nextCatalogPageUrl = null
                 currentCatalogPageUrl = destination
                 hasMoreCatalogPages = true
@@ -693,6 +697,28 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                             ) {
                                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     val image = entry.imageUrl?.takeIf { it.isNotBlank() }
+                                        ?: resolvedCoverUrls[entry.url]
+                                    if (image.isNullOrBlank() && entry.url !in coverLookupsInProgress) {
+                                        LaunchedEffect(entry.url, image) {
+                                            if (entry.url !in resolvedCoverUrls && entry.url !in coverLookupsInProgress) {
+                                                coverLookupsInProgress = coverLookupsInProgress + entry.url
+                                                val cover = NexusToonsAdapter.fetchCoverForEntry(entry.url)
+                                                if (!cover.isNullOrBlank()) {
+                                                    resolvedCoverUrls = resolvedCoverUrls + (entry.url to cover)
+                                                    val updatedEntries = accumulatedCatalogEntries.map { item ->
+                                                        if (item.url == entry.url && item.imageUrl.isNullOrBlank()) {
+                                                            item.copy(imageUrl = cover)
+                                                        } else item
+                                                    }
+                                                    accumulatedCatalogEntries = updatedEntries
+                                                    page = page?.copy(entries = page?.entries.orEmpty().map { item ->
+                                                        if (item.url == entry.url && item.imageUrl.isNullOrBlank()) item.copy(imageUrl = cover) else item
+                                                    })
+                                                }
+                                                coverLookupsInProgress = coverLookupsInProgress - entry.url
+                                            }
+                                        }
+                                    }
                                     if (!image.isNullOrBlank()) {
                                         AsyncImage(
                                             model = ImageRequest.Builder(imageContext)
