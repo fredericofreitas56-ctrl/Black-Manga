@@ -1,5 +1,9 @@
 package com.blackmanga.app
 
+import java.text.Normalizer
+import java.net.URI
+import java.net.URLDecoder
+
 import android.view.View
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -71,6 +75,31 @@ private fun nexusCatalogEntryKey(rawUrl: String): String =
         .replace("http://", "https://", ignoreCase = true)
         .trimEnd('/')
         .lowercase()
+
+private fun nexusCatalogTitleKey(rawTitle: String): String =
+    Normalizer.normalize(rawTitle.trim(), Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "")
+        .lowercase()
+        .replace(Regex("[^a-z0-9]+"), "")
+
+private fun nexusCatalogSlugKey(rawUrl: String): String {
+    val path = runCatching { URI(rawUrl.trim().substringBefore("?").substringBefore("#")).path.orEmpty() }
+        .getOrDefault("")
+    val rawSlug = path.substringAfterLast('/')
+    val decoded = runCatching { URLDecoder.decode(rawSlug, "UTF-8") }.getOrDefault(rawSlug)
+    return nexusCatalogTitleKey(decoded.removeSuffix(".html").removeSuffix(".htm"))
+}
+
+private fun mergeNexusCover(target: NexusEntry, source: NexusEntry): NexusEntry =
+    target.copy(
+        imageUrl = source.imageUrl?.takeIf { it.isNotBlank() } ?: target.imageUrl,
+        description = target.description.ifBlank { source.description },
+        kind = target.kind.ifBlank { source.kind },
+        status = target.status.ifBlank { source.status },
+        rating = target.rating.ifBlank { source.rating },
+        chapterCount = target.chapterCount.ifBlank { source.chapterCount },
+        genres = (target.genres + source.genres).distinct()
+    )
 
 @Composable
 internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
@@ -191,17 +220,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 }.getOrNull()
                                 if (visualPage == null) apiPage else {
                                     val visualByUrl = visualPage.entries.associateBy { nexusCatalogEntryKey(it.url) }
+                                    val visualBySlug = visualPage.entries.groupBy { nexusCatalogSlugKey(it.url) }
+                                    val visualByTitle = visualPage.entries.groupBy { nexusCatalogTitleKey(it.title) }
                                     apiPage.copy(entries = apiPage.entries.map { entry ->
                                         val visual = visualByUrl[nexusCatalogEntryKey(entry.url)]
-                                        if (visual == null) entry else entry.copy(
-                                            imageUrl = visual.imageUrl?.takeIf { it.isNotBlank() } ?: entry.imageUrl,
-                                            description = entry.description.ifBlank { visual.description },
-                                            kind = entry.kind.ifBlank { visual.kind },
-                                            status = entry.status.ifBlank { visual.status },
-                                            rating = entry.rating.ifBlank { visual.rating },
-                                            chapterCount = entry.chapterCount.ifBlank { visual.chapterCount },
-                                            genres = (entry.genres + visual.genres).distinct()
-                                        )
+                                            ?: visualBySlug[nexusCatalogSlugKey(entry.url)]?.firstOrNull()
+                                            ?: visualByTitle[nexusCatalogTitleKey(entry.title)]?.firstOrNull()
+                                        if (visual == null) entry else mergeNexusCover(entry, visual)
                                     }, genres = visualPage.genres)
                                 }
                             } else NexusToonsAdapter.load(destination)
@@ -949,16 +974,18 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             page?.entries.orEmpty().forEach { previewByUrl[nexusCatalogEntryKey(it.url)] = it }
                                             domEntries.forEach { fresh ->
                                                 val key = nexusCatalogEntryKey(fresh.url)
-                                                val old = previewByUrl[key]
-                                                previewByUrl[key] = if (old == null) fresh else old.copy(
-                                                    imageUrl = fresh.imageUrl?.takeIf { it.isNotBlank() } ?: old.imageUrl,
-                                                    description = old.description.ifBlank { fresh.description },
-                                                    kind = old.kind.ifBlank { fresh.kind },
-                                                    status = old.status.ifBlank { fresh.status },
-                                                    rating = old.rating.ifBlank { fresh.rating },
-                                                    chapterCount = old.chapterCount.ifBlank { fresh.chapterCount },
-                                                    genres = (old.genres + fresh.genres).distinct()
-                                                )
+                                                val titleKey = nexusCatalogTitleKey(fresh.title)
+                                                val slugKey = nexusCatalogSlugKey(fresh.url)
+                                                val matchingKey = key.takeIf { previewByUrl.containsKey(it) }
+                                                    ?: previewByUrl.entries.firstOrNull { (_, existing) ->
+                                                        slugKey.isNotBlank() && slugKey == nexusCatalogSlugKey(existing.url)
+                                                    }?.key
+                                                    ?: previewByUrl.entries.firstOrNull { (_, existing) ->
+                                                        titleKey.length >= 4 && titleKey == nexusCatalogTitleKey(existing.title)
+                                                    }?.key
+                                                val old = matchingKey?.let { previewByUrl[it] }
+                                                if (old == null) previewByUrl[key] = fresh
+                                                else previewByUrl[matchingKey!!] = mergeNexusCover(old, fresh)
                                             }
                                             val previewEntries = previewByUrl.values.toList()
                                             val previewCovers = previewEntries.count { !it.imageUrl.isNullOrBlank() }
@@ -981,22 +1008,18 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             oldPage?.entries.orEmpty().forEach { mergedEntryMap[nexusCatalogEntryKey(it.url)] = it }
                                             domEntries.forEach { fresh ->
                                                 val key = nexusCatalogEntryKey(fresh.url)
-                                                val old = mergedEntryMap[key]
-                                                mergedEntryMap[key] = when {
-                                                    old == null -> fresh
-                                                    !fresh.imageUrl.isNullOrBlank() && fresh.imageUrl != old.imageUrl ->
-                                                        fresh.copy(title = old.title.ifBlank { fresh.title },
-                                                            description = fresh.description.ifBlank { old.description })
-                                                    else -> old.copy(
-                                                        imageUrl = old.imageUrl?.takeIf { it.isNotBlank() } ?: fresh.imageUrl,
-                                                        description = old.description.ifBlank { fresh.description },
-                                                        kind = old.kind.ifBlank { fresh.kind },
-                                                        status = old.status.ifBlank { fresh.status },
-                                                        rating = old.rating.ifBlank { fresh.rating },
-                                                        chapterCount = old.chapterCount.ifBlank { fresh.chapterCount },
-                                                        genres = (old.genres + fresh.genres).distinct()
-                                                    )
-                                                }
+                                                val titleKey = nexusCatalogTitleKey(fresh.title)
+                                                val slugKey = nexusCatalogSlugKey(fresh.url)
+                                                val matchingKey = key.takeIf { mergedEntryMap.containsKey(it) }
+                                                    ?: mergedEntryMap.entries.firstOrNull { (_, existing) ->
+                                                        slugKey.isNotBlank() && slugKey == nexusCatalogSlugKey(existing.url)
+                                                    }?.key
+                                                    ?: mergedEntryMap.entries.firstOrNull { (_, existing) ->
+                                                        titleKey.length >= 4 && titleKey == nexusCatalogTitleKey(existing.title)
+                                                    }?.key
+                                                val old = matchingKey?.let { mergedEntryMap[it] }
+                                                if (old == null) mergedEntryMap[key] = fresh
+                                                else mergedEntryMap[matchingKey!!] = mergeNexusCover(old, fresh)
                                             }
                                             val combinedEntries = mergedEntryMap.values.toList().take(5000)
                                             accumulatedCatalogEntries = combinedEntries
