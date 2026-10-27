@@ -318,9 +318,7 @@ internal object NexusToonsAdapter {
                 .orEmpty()
         }
 
-        val currentNoQuery = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }
-        val sourcePath = currentNoQuery.lowercase()
-        val isCataloguePage = sourcePath in catalogueRoutes
+        val isCataloguePage = isCatalogueUrl(pageUrl)
         val workEntries = document.select("a[href*='/manga/']")
             .mapNotNull { anchor ->
                 val link = anchor.absUrl("href").substringBefore("#").trim()
