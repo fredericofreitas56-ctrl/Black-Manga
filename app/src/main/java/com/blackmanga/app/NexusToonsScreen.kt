@@ -79,6 +79,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     var page by remember { mutableStateOf<NexusPage?>(null) }
     // Keep catalogue cards across page requests; page metadata may change without replacing the grid.
     var accumulatedCatalogEntries by remember(startUrl) { mutableStateOf<List<NexusEntry>>(emptyList()) }
+    var hasMoreCatalogPages by remember(startUrl) { mutableStateOf(true) }
     var viewMode by remember(startUrl) {
         mutableStateOf(
             when {
@@ -128,6 +129,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 fallbackGenre = "Todos"
                 page = null
                 accumulatedCatalogEntries = emptyList()
+                hasMoreCatalogPages = true
                 readerImages = emptyList()
                 if (targetMode != "reader") readerTitle = ""
                 selectedChapterUrl = null
@@ -205,7 +207,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 val needsExtraction = when (targetMode) {
                     "reader" -> result.readerImages.isEmpty()
                     "detail" -> result.chapters.isEmpty()
-                    else -> result.entries.size < 8 || poorCoverCoverage
+                    else -> freshEntries.isEmpty() || result.entries.size < 8 || poorCoverCoverage
+                }
+                if (appendEntries && targetMode == "catalog" && !needsExtraction) {
+                    hasMoreCatalogPages = mergedEntries.size > previousEntries.size
                 }
                 if (needsExtraction) {
                     needsDomFallback = true
@@ -221,6 +226,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     chapters = emptyList()
                 )
                 accumulatedCatalogEntries = previousEntries
+                if (appendEntries && targetMode == "catalog") hasMoreCatalogPages = false
                 needsDomFallback = true
                 domFallbackLoading = true
             } finally {
@@ -636,9 +642,14 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                         domFallbackMessage = "Esta página não disponibilizou um link para carregar mais títulos."
                                     }
                                 },
-                                enabled = nextPage != null && !loading,
+                                enabled = hasMoreCatalogPages && nextPage != null && !loading,
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                            ) { Text("Carregar mais títulos") }
+                            ) {
+                                Text(
+                                    if (hasMoreCatalogPages && nextPage != null) "Carregar mais títulos"
+                                    else "Não foram encontrados mais títulos"
+                                )
+                            }
                         }
                     }
                 }
@@ -705,6 +716,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 } else {
                                                     domFallbackLoading = false
                                                     needsDomFallback = false
+                                                    if (appendEntries && targetMode == "catalog") hasMoreCatalogPages = false
                                                     domFallbackMessage = "Não foi possível reconhecer o catálogo. Tenta novamente."
                                                 }
                                                 return@evaluateJavascript
@@ -819,6 +831,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             }
                                             val combinedEntries = mergedEntryMap.values.toList().take(5000)
                                             accumulatedCatalogEntries = combinedEntries
+                                            if (appendEntries && targetMode == "catalog") {
+                                                hasMoreCatalogPages = combinedEntries.size > previousEntries.size
+                                            }
                                             val combinedChapters = (oldPage?.chapters.orEmpty() + extractedChapters)
                                                 .distinctBy { it.url }.take(600)
                                             val combinedImages = (extractedImages + oldPage?.readerImages.orEmpty()).distinct().take(150)
