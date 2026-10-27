@@ -1,10 +1,14 @@
 package com.blackmanga.app
 
+import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.security.MessageDigest
 
 internal data class NexusEntry(
     val title: String,
@@ -42,6 +46,34 @@ internal data class NexusPage(
 
 internal object NexusToonsAdapter {
     private const val HOST = "nexustoons.com"
+    private const val API_ROOT = "https://nexustoons.com/api/"
+    private const val API_APP_KEY = "NxT_s3cur3_k3y_2026!xK9mPqL"
+    private const val API_CRYPTO_SEED = "OrionNexus2025CryptoKey!Secure"
+    private const val API_PAGE_SIZE = 500
+
+    private data class CryptoKey(
+        val key: ByteArray,
+        val inverseBox: ByteArray
+    )
+
+    private val apiCryptoKeys: List<CryptoKey> by lazy {
+        (0 until 5).map { index ->
+            val key = MessageDigest.getInstance("SHA-256").digest(
+                "_orion_key_${index}_v2_${API_CRYPTO_SEED}".toByteArray(Charsets.UTF_8)
+            )
+            val box = IntArray(256) { it }
+            var j = 0
+            for (i in 0 until 256) {
+                j = (j + box[i] + (key[i % key.size].toInt() and 0xff)) % 256
+                val tmp = box[i]
+                box[i] = box[j]
+                box[j] = tmp
+            }
+            val inverse = ByteArray(256)
+            for (i in 0 until 256) inverse[box[i]] = i.toByte()
+            CryptoKey(key, inverse)
+        }
+    }
 
     private val genericLabels = setOf(
         "ver detalhes", "detalhes", "ler agora", "ler", "abrir", "ver mais",
@@ -147,15 +179,91 @@ internal object NexusToonsAdapter {
     } catch (_: Exception) { null }
 
     /**
-     * Kotatsu-style paging: try the source's explicit next link first, then likely
-     * query-based archive cursors. Accept a candidate only when it adds unseen works.
-     * The caller keeps the current grid visible while this batch is fetched.
+     * Fetch catalogue batches through the site's API. The public NexusToons connector in
+     * HaruNeko uses this API instead of depending on the HTML infinite-scroll list.
+     */
+    suspend fun loadApiCataloguePage(pageNumber: Int): NexusPage? = withContext(Dispatchers.IO) {
+        if (pageNumber < 1) return@withContext null
+        val apiUrl = API_ROOT + "mangas?page=$pageNumber&limit=$API_PAGE_SIZE"
+        val body = try {
+            Jsoup.connect(apiUrl)
+                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                .header("X-App-Key", API_APP_KEY)
+                .header("Accept", "application/json")
+                .ignoreContentType(true)
+                .timeout(20000)
+                .execute()
+                .body()
+        } catch (_: Exception) {
+            return@withContext null
+        }
+        val response = runCatching { JSONObject(body) }.getOrNull() ?: return@withContext null
+        val payload = if (response.has("d") && !response.isNull("d")) {
+            val decrypted = runCatching {
+                decryptApiPayload(response.optString("d"), response.optInt("v", 1), response.optInt("k", 0))
+            }.getOrNull() ?: return@withContext null
+            runCatching { JSONObject(decrypted) }.getOrNull() ?: return@withContext null
+        } else response
+        val data = payload.optJSONArray("data") ?: JSONArray()
+        val entries = buildList {
+            for (index in 0 until data.length()) {
+                val item = data.optJSONObject(index) ?: continue
+                val title = item.optString("title").trim()
+                val slug = item.optString("slug").trim().trim('/')
+                if (title.isBlank() || slug.isBlank()) continue
+                val titleUrl = "https://nexustoons.com/manga/$slug"
+                val chapterCount = item.optJSONArray("chapters")?.length()?.takeIf { it > 0 }?.toString().orEmpty()
+                add(NexusEntry(title = title, url = titleUrl, chapterCount = chapterCount))
+            }
+        }.distinctBy { it.url }
+        val nextCursor = if (data.length() >= API_PAGE_SIZE) {
+            "https://nexustoons.com/biblioteca?blackmanga_api_page=${pageNumber + 1}"
+        } else null
+        NexusPage(
+            title = "Biblioteca Nexus Toons",
+            url = "https://nexustoons.com/biblioteca?blackmanga_api_page=$pageNumber",
+            entries = entries,
+            readerImages = emptyList(),
+            nextPageUrl = nextCursor
+        )
+    }
+
+    private fun decryptApiPayload(encoded: String, version: Int, keyIndexValue: Int): String {
+        val keyIndex = if (version == 1) 0 else keyIndexValue.coerceIn(0, apiCryptoKeys.lastIndex)
+        val crypto = apiCryptoKeys[keyIndex]
+        val message = Base64.decode(encoded, Base64.DEFAULT)
+        val result = ByteArray(message.size)
+        for (index in message.indices.reversed()) {
+            var value = message[index].toInt() and 0xff
+            value = value xor (if (index > 0) message[index - 1].toInt() and 0xff else crypto.key.last().toInt() and 0xff)
+            value = crypto.inverseBox[value].toInt() and 0xff
+            val rotation = (((crypto.key[(index + 3) % crypto.key.size].toInt() and 0xff) + (index and 0xff)) and 0xff) % 7 + 1
+            value = ((value ushr rotation) or (value shl (8 - rotation))) and 0xff
+            value = value xor (crypto.key[index % crypto.key.size].toInt() and 0xff)
+            result[index] = value.toByte()
+        }
+        return String(result, Charsets.UTF_8)
+    }
+
+    /**
+     * Fetch a single batch and accept it only when it contains titles not already visible.
+     * The caller keeps the current grid in place.
      */
     suspend fun loadNextCataloguePage(
         currentPageUrl: String,
         preferredNextUrl: String?,
         existingEntryUrls: Set<String>
     ): NexusPage? = withContext(Dispatchers.IO) {
+        val apiPageNumber = preferredNextUrl?.let {
+            Regex("[?&]blackmanga_api_page=(\\d+)", RegexOption.IGNORE_CASE)
+                .find(it)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        }
+        if (apiPageNumber != null) {
+            val apiPage = loadApiCataloguePage(apiPageNumber)
+            if (apiPage != null && apiPage.entries.any { it.url !in existingEntryUrls }) {
+                return@withContext apiPage
+            }
+        }
         if (!supports(currentPageUrl)) return@withContext null
         val current = runCatching { URI(currentPageUrl) }.getOrNull() ?: return@withContext null
         val currentPath = current.path.orEmpty().trimEnd('/').ifBlank { "/" }
