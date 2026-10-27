@@ -733,7 +733,18 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 .build(),
                                             contentDescription = entry.title,
                                             modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
-                                            contentScale = ContentScale.Crop
+                                            contentScale = ContentScale.Crop,
+                                            onError = {
+                                                // API image fields can contain a non-displayable URL.
+                                                // Clear it so the cover resolver runs for this title.
+                                                resolvedCoverUrls = resolvedCoverUrls - entry.url
+                                                accumulatedCatalogEntries = accumulatedCatalogEntries.map { item ->
+                                                    if (item.url == entry.url) item.copy(imageUrl = null) else item
+                                                }
+                                                page = page?.copy(entries = page?.entries.orEmpty().map { item ->
+                                                    if (item.url == entry.url) item.copy(imageUrl = null) else item
+                                                })
+                                            }
                                         )
                                     } else {
                                         Box(
@@ -741,7 +752,11 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 .background(Color(0xFFFFE9DE), RoundedCornerShape(5.dp)),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            Text("SEM CAPA", color = accent, fontSize = 9.sp)
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                color = accent,
+                                                strokeWidth = 2.dp
+                                            )
                                         }
                                     }
                                     Text(
