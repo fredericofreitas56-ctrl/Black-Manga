@@ -280,7 +280,7 @@ internal object NexusToonsAdapter {
         }.getOrNull() ?: return@withContext null
 
         fun candidate(raw: String, base: String): String? {
-            val value = raw.trim().removeSurrounding("\\\"").removeSurrounding("'")
+            val value = raw.trim().removeSurrounding("\"").removeSurrounding("'")
             if (value.isBlank() || value.startsWith("data:", true) || value.startsWith("blob:", true)) return null
             val url = runCatching { URI(base).resolve(URI(value)).toString() }.getOrNull() ?: return null
             if (!url.startsWith("https://", true)) return null
