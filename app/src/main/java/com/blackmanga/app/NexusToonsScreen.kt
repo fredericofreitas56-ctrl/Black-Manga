@@ -900,9 +900,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             val combinedChapters = (oldPage?.chapters.orEmpty() + extractedChapters)
                                                 .distinctBy { it.url }.take(600)
                                             val combinedImages = (extractedImages + oldPage?.readerImages.orEmpty()).distinct().take(150)
-                                            val nextUrl = data.optString("nextPageUrl", "")
-                                                .takeIf { it.startsWith("https://") && NexusToonsAdapter.supports(it) }
+                                            val nextUrl = nextCatalogPageUrl
                                                 ?: NexusToonsAdapter.guessedNextPageUrl(currentUrl)
+                                                ?: data.optString("nextPageUrl", "")
+                                                    .takeIf { it.startsWith("https://") && NexusToonsAdapter.supports(it) }
                                             nextCatalogPageUrl = nextUrl
                                             hasMoreCatalogPages = nextUrl != null
                                             page = NexusPage(
@@ -921,7 +922,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 rating = data.optString("rating", "").ifBlank { oldPage?.rating.orEmpty() },
                                                 chapterCount = data.optString("chapterCount", "").ifBlank { oldPage?.chapterCount.orEmpty() }
                                             )
-                                            if (combinedImages.isNotEmpty()) {
+                                            // A 404 page can contain a logo or an X image.
+                                            // Never interpret those assets as chapter pages unless the user
+                                            // explicitly opened a reader URL.
+                                            if (combinedImages.isNotEmpty() && NexusToonsAdapter.isReaderUrl(currentUrl)) {
                                                 readerImages = combinedImages
                                                 if (readerTitle.isBlank()) {
                                                     readerTitle = data.optString("title", oldPage?.title ?: "Capítulo").ifBlank { "Capítulo" }
