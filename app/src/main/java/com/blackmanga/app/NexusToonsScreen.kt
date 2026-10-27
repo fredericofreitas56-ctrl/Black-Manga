@@ -311,7 +311,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             history = history.dropLast(1)
             load(previous, false)
         } else if (viewMode != "catalog") {
-            load("https://nexustoons.com/", false, forcedMode = "catalog")
+            load("https://nexustoons.com/biblioteca", false, forcedMode = "catalog")
         } else {
             onBack()
         }
