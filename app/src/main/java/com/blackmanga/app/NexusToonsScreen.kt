@@ -92,6 +92,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         )
     }
     var loading by remember { mutableStateOf(false) }
+    var loadingMoreCatalog by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf("Todos") }
@@ -125,7 +126,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         scope.launch {
             appendingCatalogPage = appendEntries && targetMode == "catalog"
             catalogEntryCountBeforeAppend = previousEntries.size
-            loading = true
+            loading = !appendEntries
+            loadingMoreCatalog = appendEntries && targetMode == "catalog"
             error = ""
             if (!appendEntries) {
                 filter = ""
@@ -208,14 +210,19 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 val repeatedCovers = coverCounts.values.any { it >= 3 }
                 val poorCoverCoverage = result.entries.size >= 8 &&
                     (coverUrls.size < result.entries.size * 0.65 || repeatedCovers)
-                val needsExtraction = when (targetMode) {
-                    "reader" -> result.readerImages.isEmpty()
-                    "detail" -> result.chapters.isEmpty()
+                // Load-more must behave like the MangaDex grid: append the HTML-parser
+                // batch immediately. Do not navigate the hidden WebView just because some
+                // covers are missing; that caused the whole source page to reload on every click.
+                val needsExtraction = when {
+                    targetMode == "reader" -> result.readerImages.isEmpty()
+                    targetMode == "detail" -> result.chapters.isEmpty()
+                    appendEntries && targetMode == "catalog" -> freshEntries.isEmpty()
                     else -> freshEntries.isEmpty() || result.entries.size < 8 || poorCoverCoverage
                 }
                 if (appendEntries && targetMode == "catalog" && !needsExtraction) {
                     hasMoreCatalogPages = mergedEntries.size > previousEntries.size
                     appendingCatalogPage = false
+                    loadingMoreCatalog = false
                 }
                 if (needsExtraction) {
                     needsDomFallback = true
@@ -236,6 +243,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 domFallbackLoading = true
             } finally {
                 loading = false
+                if (!domFallbackLoading) loadingMoreCatalog = false
             }
         }
     }
@@ -647,13 +655,24 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                         domFallbackMessage = "Esta página não disponibilizou um link para carregar mais títulos."
                                     }
                                 },
-                                enabled = hasMoreCatalogPages && nextPage != null && !loading,
+                                enabled = hasMoreCatalogPages && nextPage != null && !loading && !loadingMoreCatalog,
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
                             ) {
-                                Text(
-                                    if (hasMoreCatalogPages && nextPage != null) "Carregar mais títulos"
-                                    else "Não foram encontrados mais títulos"
-                                )
+                                if (loadingMoreCatalog) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                        Spacer(Modifier.size(8.dp))
+                                        Text("A carregar mais títulos…")
+                                    }
+                                } else {
+                                    Text(
+                                        if (hasMoreCatalogPages && nextPage != null) "Carregar mais títulos"
+                                        else "Não foram encontrados mais títulos"
+                                    )
+                                }
                             }
                         }
                     }
