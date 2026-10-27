@@ -286,8 +286,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 val hasApiCatalogBatch = targetMode == "catalog" &&
                     directPage?.url.orEmpty().contains("blackmanga_api_page=")
                 val needsExtraction = when {
-                    hasApiCatalogBatch -> false
-                    // Never mount/reload WebView just to fetch another catalogue page.
+                    // Never mount/reload WebView on a "load more" click: that click only
+                    // fetches the next API batch and merges it into the visible list.
                     appendEntries && targetMode == "catalog" -> false
                     targetMode == "reader" -> result.readerImages.isEmpty()
                     targetMode == "detail" -> result.chapters.isEmpty()
