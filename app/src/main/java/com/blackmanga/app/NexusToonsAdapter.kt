@@ -430,13 +430,14 @@ internal object NexusToonsAdapter {
                     .distinctBy { it.url }
                     .sortedByDescending { it.score }
                     .asSequence()
+                    .take(8)
                     .map { it.url }
                     .firstOrNull { imageUrl ->
                         runCatching {
                             val connection = (java.net.URL(imageUrl).openConnection() as java.net.HttpURLConnection).apply {
                                 requestMethod = "GET"
-                                connectTimeout = 7000
-                                readTimeout = 7000
+                                connectTimeout = 3500
+                                readTimeout = 3500
                                 instanceFollowRedirects = true
                                 setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
                                 setRequestProperty("Referer", "https://nexustoons.com/")
