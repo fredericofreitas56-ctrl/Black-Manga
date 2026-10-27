@@ -145,7 +145,7 @@ internal object NexusToonsAdapter {
         val pageUrl = document.baseUri().ifBlank { uri.toASCIIString() }
 
         fun resolveImageCandidate(rawValue: String, base: String): String? {
-            val raw = rawValue.trim().removeSurrounding("\\"").removeSurrounding("'")
+            val raw = rawValue.trim().removeSurrounding("\"").removeSurrounding("'")
             if (raw.isBlank() || raw.startsWith("data:", true) || raw.startsWith("blob:", true)) return null
             val resolved = runCatching { URI(base).resolve(URI(raw)).toString() }.getOrNull() ?: return null
             if (!resolved.startsWith("https://", true)) return null
@@ -205,7 +205,7 @@ internal object NexusToonsAdapter {
                     }.reversed()
                 } else listOf(value)
             }
-            val cssCandidates = Regex("""url\\((?:['"])?(.*?)(?:['"])?\\)""", RegexOption.IGNORE_CASE)
+            val cssCandidates = Regex("""url\((?:['"])?(.*?)(?:['"])?\)""", RegexOption.IGNORE_CASE)
                 .findAll(element.attr("style"))
                 .map { it.groupValues[1].trim() }
                 .toList()
