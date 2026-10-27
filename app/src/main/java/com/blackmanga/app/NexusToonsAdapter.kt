@@ -76,11 +76,16 @@ internal object NexusToonsAdapter {
         val uri = URI(rawUrl.trim())
         val route = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }.lowercase()
         val hasNativePage = Regex(
-            "(?:^|&)(?:updates_page|paged|page)=\\d+",
+            "(?:^|&)(?:updates_page|paged|page|pagina)=\\d+",
             RegexOption.IGNORE_CASE
         ).containsMatchIn(uri.rawQuery.orEmpty())
-        // Keep the site's own pagination query (e.g. ?updates_page=2) intact.
-        if (supports(rawUrl) && route in catalogueRoutes && !hasNativePage) "https://nexustoons.com/" else rawUrl
+        // /biblioteca is the site's full series list. Never collapse it back to the homepage.
+        // Only a bare homepage URL is promoted into the integrated full catalogue.
+        if (supports(rawUrl) && route == "/" && !hasNativePage && uri.rawQuery.isNullOrBlank()) {
+            "https://nexustoons.com/biblioteca"
+        } else {
+            rawUrl
+        }
     } catch (_: Exception) {
         rawUrl
     }
@@ -130,12 +135,13 @@ internal object NexusToonsAdapter {
             val prefix = pagePath.groupValues[1].ifBlank { "" }
             return uri.scheme + "://" + uri.rawAuthority + prefix + "/page/" + next + "/"
         }
-        if (path == "/") return uri.scheme + "://" + uri.rawAuthority + "/?updates_page=2"
+        if (path == "/") return uri.scheme + "://" + uri.rawAuthority + "/biblioteca?page=2"
+        if (path == "/biblioteca") return uri.scheme + "://" + uri.rawAuthority + "/biblioteca?page=2"
         if (path.startsWith("/genero/") || path.startsWith("/generos/") ||
             path.startsWith("/genre/") || path.startsWith("/genres/") ||
             path.startsWith("/categoria/") || path.startsWith("/categorias/") ||
             path.startsWith("/tag/")) {
-            return uri.scheme + "://" + uri.rawAuthority + path + "/page/2/"
+            return uri.scheme + "://" + uri.rawAuthority + path + "?page=2"
         }
         null
     } catch (_: Exception) { null }
@@ -193,11 +199,15 @@ internal object NexusToonsAdapter {
             addQueryCandidate(currentPath, parameter)
         }
         if (currentPath == "/") {
-            // NexusToons documents /biblioteca as its series-list route; some deployments
-            // paginate that list separately from the homepage updates feed.
-            for (parameter in listOf("updates_page", "page", "paged")) {
+            // Bare homepage is not the complete catalogue; the series list lives at /biblioteca.
+            safeCandidate(current.scheme + "://" + current.rawAuthority + "/biblioteca")
+            for (parameter in listOf("page", "paged", "updates_page")) {
                 addQueryCandidate("/biblioteca", parameter)
             }
+        } else if (currentPath == "/biblioteca") {
+            // Prefer the site's ordinary page cursor for the full series list.
+            addQueryCandidate("/biblioteca", "page")
+            safeCandidate(current.scheme + "://" + current.rawAuthority + "/biblioteca/page/$nextNumber/")
         }
 
         for (candidateUrl in candidates.take(7)) {
