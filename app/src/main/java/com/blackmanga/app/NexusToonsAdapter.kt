@@ -75,7 +75,12 @@ internal object NexusToonsAdapter {
     fun normalizeCatalogueStart(rawUrl: String): String = try {
         val uri = URI(rawUrl.trim())
         val route = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }.lowercase()
-        if (supports(rawUrl) && route in catalogueRoutes) "https://nexustoons.com/" else rawUrl
+        val hasNativePage = Regex(
+            "(?:^|&)(?:updates_page|paged|page)=\\d+",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(uri.rawQuery.orEmpty())
+        // Keep the site's own pagination query (e.g. ?updates_page=2) intact.
+        if (supports(rawUrl) && route in catalogueRoutes && !hasNativePage) "https://nexustoons.com/" else rawUrl
     } catch (_: Exception) {
         rawUrl
     }
@@ -98,8 +103,8 @@ internal object NexusToonsAdapter {
             path.startsWith("/tag/") ||
             Regex("/page/\\d+").containsMatchIn(path) ||
             Regex("/pagina/\\d+").containsMatchIn(path) ||
-            uri.rawQuery.orEmpty().contains("paged=") ||
-            uri.rawQuery.orEmpty().contains("page=")
+            Regex("(?:^|&)(?:updates_page|paged|page)=\\d+", RegexOption.IGNORE_CASE)
+                .containsMatchIn(uri.rawQuery.orEmpty())
         )
     } catch (_: Exception) { false }
 
@@ -108,6 +113,12 @@ internal object NexusToonsAdapter {
         if (!supports(rawUrl) || !isCatalogueUrl(rawUrl)) return null
         val path = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }
         val query = uri.rawQuery.orEmpty()
+        val nativeUpdatesPage = Regex("([?&]updates_page=)(\\d+)", RegexOption.IGNORE_CASE).find(rawUrl)
+        if (nativeUpdatesPage != null) {
+            val nextQuery = nativeUpdatesPage.groupValues[1] +
+                ((nativeUpdatesPage.groupValues[2].toIntOrNull() ?: 1) + 1)
+            return rawUrl.replaceRange(nativeUpdatesPage.range, nextQuery)
+        }
         val queryPage = Regex("([?&](?:paged|page)=)(\\d+)", RegexOption.IGNORE_CASE).find(rawUrl)
         if (queryPage != null) {
             val nextQuery = queryPage.groupValues[1] + (queryPage.groupValues[2].toIntOrNull()?.plus(1) ?: 2)
@@ -119,7 +130,7 @@ internal object NexusToonsAdapter {
             val prefix = pagePath.groupValues[1].ifBlank { "" }
             return uri.scheme + "://" + uri.rawAuthority + prefix + "/page/" + next + "/"
         }
-        if (path == "/") return uri.scheme + "://" + uri.rawAuthority + "/page/2/"
+        if (path == "/") return uri.scheme + "://" + uri.rawAuthority + "/?updates_page=2"
         if (path.startsWith("/genero/") || path.startsWith("/generos/") ||
             path.startsWith("/genre/") || path.startsWith("/genres/") ||
             path.startsWith("/categoria/") || path.startsWith("/categorias/") ||
@@ -404,9 +415,22 @@ internal object NexusToonsAdapter {
             .distinctBy { it.url }
             .take(30)
 
-        val nextPageUrl = document.select("a[rel=next],.pagination a.next,.nav-links a.next,a.page-numbers.next,a.load-more,.load-more a")
+        val currentUpdatesPage = Regex("(?:^|&)updates_page=(\\d+)", RegexOption.IGNORE_CASE)
+            .find(uri.rawQuery.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+        val nativeNextPageUrl = document.select("a[href*=updates_page]").mapNotNull { anchor ->
+            val link = anchor.absUrl("href").takeIf { supports(it) && it.startsWith("https://") } ?: return@mapNotNull null
+            val linkUri = runCatching { URI(link) }.getOrNull() ?: return@mapNotNull null
+            val pageNumber = Regex("(?:^|&)updates_page=(\\d+)", RegexOption.IGNORE_CASE)
+                .find(linkUri.rawQuery.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: return@mapNotNull null
+            if (pageNumber > currentUpdatesPage) pageNumber to link else null
+        }.minByOrNull { it.first }?.second
+        val standardNextPageUrl = document.select("a[rel=next],.pagination a.next,.nav-links a.next,a.page-numbers.next,a.load-more,.load-more a")
             .mapNotNull { it.absUrl("href").takeIf { link -> supports(link) && link.startsWith("https://") } }
             .firstOrNull()
+        val guessedNextPageUrl = guessedNextPageUrl(pageUrl)
+        val isHomeCatalogue = uri.path.orEmpty().trimEnd('/').ifBlank { "/" } == "/"
+        val nextPageUrl = nativeNextPageUrl ?: if (isHomeCatalogue) guessedNextPageUrl else standardNextPageUrl ?: guessedNextPageUrl
 
         val detailsText = cleaned(document.text())
         val synopsis = document.selectFirst(
