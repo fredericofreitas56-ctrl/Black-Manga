@@ -119,6 +119,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     var accumulatedCatalogEntries by remember(startUrl) { mutableStateOf<List<NexusEntry>>(emptyList()) }
     var resolvedCoverUrls by remember(startUrl) { mutableStateOf<Map<String, String>>(emptyMap()) }
     var rejectedCoverUrls by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
+    var coverLookupFailures by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
     var coverLookupsInProgress by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
     // The screen URL stays on the first catalogue page; this cursor advances independently.
     var nextCatalogPageUrl by remember(startUrl) { mutableStateOf<String?>(null) }
@@ -182,6 +183,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 accumulatedCatalogEntries = emptyList()
                 resolvedCoverUrls = emptyMap()
                 rejectedCoverUrls = emptySet()
+                coverLookupFailures = emptySet()
                 coverLookupsInProgress = emptySet()
                 nextCatalogPageUrl = null
                 currentCatalogPageUrl = destination
@@ -735,9 +737,14 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                         .filterNotNull()
                                         .map { it.trim() }
                                         .firstOrNull { it.isNotBlank() && it !in rejectedCoverUrls }
-                                    LaunchedEffect(entry.url, image) {
+                                    LaunchedEffect(entry.url, image, needsDomFallback, domFallbackLoading) {
+                                        // Finish the shared WebView scan first; don't launch
+                                        // one HTTP request per card while the scan is still moving.
                                         if (image.isNullOrBlank() &&
+                                            !needsDomFallback &&
+                                            !domFallbackLoading &&
                                             entry.url !in resolvedCoverUrls &&
+                                            entry.url !in coverLookupFailures &&
                                             entry.url !in coverLookupsInProgress
                                         ) {
                                             coverLookupsInProgress = coverLookupsInProgress + entry.url
@@ -754,7 +761,11 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                     page = page?.copy(entries = page?.entries.orEmpty().map { item ->
                                                         if (item.url == entry.url && item.imageUrl.isNullOrBlank()) item.copy(imageUrl = cover) else item
                                                     })
+                                                } else {
+                                                    coverLookupFailures = coverLookupFailures + entry.url
                                                 }
+                                            } catch (_: Exception) {
+                                                coverLookupFailures = coverLookupFailures + entry.url
                                             } finally {
                                                 coverLookupsInProgress = coverLookupsInProgress - entry.url
                                             }
@@ -774,6 +785,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             onError = {
                                                 // API image fields can contain a URL which is not an image.
                                                 rejectedCoverUrls = rejectedCoverUrls + image
+                                                coverLookupFailures = coverLookupFailures - entry.url
                                                 resolvedCoverUrls = resolvedCoverUrls - entry.url
                                                 accumulatedCatalogEntries = accumulatedCatalogEntries.map { item ->
                                                     if (item.url == entry.url) item.copy(imageUrl = null) else item
@@ -789,11 +801,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 .background(Color(0xFFFFE9DE), RoundedCornerShape(5.dp)),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(16.dp),
-                                                color = accent,
-                                                strokeWidth = 2.dp
-                                            )
+                                            if (entry.url in coverLookupsInProgress || domFallbackLoading || needsDomFallback) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(16.dp),
+                                                    color = accent,
+                                                    strokeWidth = 2.dp
+                                                )
+                                            }
                                         }
                                     }
                                     Text(
