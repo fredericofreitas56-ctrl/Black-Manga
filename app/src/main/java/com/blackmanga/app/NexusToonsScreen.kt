@@ -69,7 +69,7 @@ private fun nexusCatalogEntryKey(rawUrl: String): String =
         .replace("https://www.", "https://", ignoreCase = true)
         .replace("http://www.", "https://", ignoreCase = true)
         .replace("http://", "https://", ignoreCase = true)
-        .trimEnd("/")
+        .trimEnd('/')
         .lowercase()
 
 @Composable
