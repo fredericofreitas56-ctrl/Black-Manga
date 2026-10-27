@@ -213,7 +213,25 @@ internal object NexusToonsAdapter {
                 if (title.isBlank() || slug.isBlank()) continue
                 val titleUrl = "https://nexustoons.com/manga/$slug"
                 val chapterCount = item.optJSONArray("chapters")?.length()?.takeIf { it > 0 }?.toString().orEmpty()
-                add(NexusEntry(title = title, url = titleUrl, chapterCount = chapterCount))
+                val imageKeys = listOf(
+                    "coverUrl", "cover_url", "imageUrl", "image_url", "thumbnailUrl",
+                    "thumbnail_url", "posterUrl", "poster_url", "cover", "image", "thumbnail", "poster"
+                )
+                val rawImage = imageKeys.firstNotNullOfOrNull { key ->
+                    item.optString(key).trim().takeIf {
+                        it.isNotBlank() && it != "null" && it != "undefined"
+                    }
+                } ?: listOf("cover", "image", "thumbnail", "poster").firstNotNullOfOrNull { key ->
+                    item.optJSONObject(key)?.let { nested ->
+                        listOf("url", "src", "imageUrl", "image_url").firstNotNullOfOrNull { child ->
+                            nested.optString(child).takeIf { it.isNotBlank() && it != "null" }
+                        }
+                    }
+                }
+                val imageUrl = rawImage?.let { raw ->
+                    runCatching { URI(API_ROOT).resolve(URI(raw)).toString() }.getOrNull()
+                }?.takeIf { it.startsWith("https://", true) }
+                add(NexusEntry(title = title, url = titleUrl, imageUrl = imageUrl, chapterCount = chapterCount))
             }
         }.distinctBy { it.url }
         val nextCursor = if (data.length() >= API_PAGE_SIZE) {
@@ -243,6 +261,60 @@ internal object NexusToonsAdapter {
             result[index] = value.toByte()
         }
         return String(result, Charsets.UTF_8)
+    }
+
+    /**
+     * Resolve a series cover from its own public detail page. API catalogue records
+     * include a title and slug but usually omit the cover URL.
+     */
+    suspend fun fetchCoverForEntry(rawUrl: String): String? = withContext(Dispatchers.IO) {
+        if (!supports(rawUrl)) return@withContext null
+        val pageUrl = runCatching { URI(rawUrl) }.getOrNull() ?: return@withContext null
+        val document = runCatching {
+            Jsoup.connect(pageUrl.toASCIIString())
+                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                .header("Referer", "https://nexustoons.com/")
+                .timeout(12000)
+                .followRedirects(true)
+                .get()
+        }.getOrNull() ?: return@withContext null
+
+        fun candidate(raw: String, base: String): String? {
+            val value = raw.trim().removeSurrounding("\\\"").removeSurrounding("'")
+            if (value.isBlank() || value.startsWith("data:", true) || value.startsWith("blob:", true)) return null
+            val url = runCatching { URI(base).resolve(URI(value)).toString() }.getOrNull() ?: return null
+            if (!url.startsWith("https://", true)) return null
+            val lower = url.lowercase()
+            if (listOf("placeholder", "blank.gif", "spacer", "transparent", "/logo", "avatar", "favicon", "sprite", "mascot", "emoji", "banner").any { lower.contains(it) }) return null
+            return url
+        }
+
+        val imageNodes = document.select(
+            ".summary_image img,.summary_image a img,.manga-cover img,.cover img,[class*=cover] img," +
+                "[class*=poster] img,[class*=thumbnail] img,.thumb img,.media img,article img,main img,img"
+        )
+        for (img in imageNodes) {
+            val raw = listOf(
+                "data-src", "data-lazy-src", "data-original", "data-lazyload",
+                "data-cover", "data-image", "data-srcset", "srcset", "src"
+            ).firstNotNullOfOrNull { attr ->
+                val value = img.attr(attr).trim()
+                if (value.isBlank()) null else if (attr.contains("srcset")) {
+                    value.split(",").lastOrNull()?.trim()?.split(Regex("\\s+"))?.firstOrNull()
+                } else value
+            } ?: continue
+            val classes = (img.className() + " " + img.id() + " " + img.attr("alt")).lowercase()
+            if (listOf("avatar", "logo", "icon", "emoji", "sprite", "mascot", "banner", "profile").any { classes.contains(it) }) continue
+            candidate(raw, img.baseUri())?.let { return@withContext it }
+        }
+
+        val meta = listOf(
+            "meta[property=og:image]", "meta[property=og:image:secure_url]",
+            "meta[name=twitter:image]", "meta[name=twitter:image:src]"
+        ).firstNotNullOfOrNull { selector ->
+            document.selectFirst(selector)?.attr("content")?.takeIf { it.isNotBlank() }
+        }
+        meta?.let { candidate(it, document.baseUri()) }
     }
 
     /**
