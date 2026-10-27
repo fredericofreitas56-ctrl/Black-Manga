@@ -79,6 +79,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     var page by remember { mutableStateOf<NexusPage?>(null) }
     // Keep catalogue cards across page requests; page metadata may change without replacing the grid.
     var accumulatedCatalogEntries by remember(startUrl) { mutableStateOf<List<NexusEntry>>(emptyList()) }
+    // The screen URL stays on the first catalogue page; this cursor advances independently.
+    var nextCatalogPageUrl by remember(startUrl) { mutableStateOf<String?>(null) }
     var hasMoreCatalogPages by remember(startUrl) { mutableStateOf(true) }
     var appendingCatalogPage by remember { mutableStateOf(false) }
     var catalogEntryCountBeforeAppend by remember { mutableStateOf(0) }
@@ -122,7 +124,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         val previousEntries = if (appendEntries) {
             accumulatedCatalogEntries.ifEmpty { previousPage?.entries.orEmpty() }
         } else emptyList()
-        if (saveHistory && currentUrl != destination) history = history + currentUrl
+        if (saveHistory && !appendEntries && currentUrl != destination) history = history + currentUrl
         scope.launch {
             appendingCatalogPage = appendEntries && targetMode == "catalog"
             catalogEntryCountBeforeAppend = previousEntries.size
@@ -135,6 +137,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 fallbackGenre = "Todos"
                 page = null
                 accumulatedCatalogEntries = emptyList()
+                nextCatalogPageUrl = null
                 hasMoreCatalogPages = true
                 readerImages = emptyList()
                 if (targetMode != "reader") readerTitle = ""
@@ -144,9 +147,12 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             needsDomFallback = false
             domFallbackLoading = false
             domFallbackMessage = ""
-            currentUrl = destination
-            viewMode = targetMode
-            if (targetMode == "catalog") selectedWork = null
+            // Pagination is data-only: don't change currentUrl/viewMode or recreate the hidden WebView.
+            if (!appendEntries) {
+                currentUrl = destination
+                viewMode = targetMode
+                if (targetMode == "catalog") selectedWork = null
+            }
 
             try {
                 val directPage: NexusPage? = try {
@@ -177,6 +183,24 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 val mergedEntries = (previousEntries + freshEntries)
                     .distinctBy { it.url }.take(5000)
                 accumulatedCatalogEntries = mergedEntries
+                val nextCursor = (directPage?.nextPageUrl
+                    ?.takeIf { it != destination && NexusToonsAdapter.supports(it) }
+                    ?: NexusToonsAdapter.guessedNextPageUrl(destination))
+                if (targetMode == "catalog") {
+                    if (!appendEntries) {
+                        nextCatalogPageUrl = nextCursor
+                        hasMoreCatalogPages = nextCursor != null
+                    } else {
+                        val addedCount = freshEntries.count { fresh -> previousEntries.none { it.url == fresh.url } }
+                        hasMoreCatalogPages = addedCount > 0 && nextCursor != null
+                        nextCatalogPageUrl = nextCursor.takeIf { hasMoreCatalogPages }
+                        loadingMoreCatalog = false
+                        appendingCatalogPage = false
+                        if (addedCount == 0) {
+                            domFallbackMessage = "Esta página não trouxe títulos novos. Mantive os títulos que já estavam no catálogo."
+                        }
+                    }
+                }
                 val mergedChapters = directPage?.chapters.orEmpty().distinctBy { it.url }.take(600)
                 val mergedImages = (directPage?.readerImages.orEmpty() + universalPage?.readerImages.orEmpty())
                     .distinct().take(150)
@@ -185,12 +209,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         ?: universalPage?.title?.takeIf { it.isNotBlank() }
                         ?: selectedWork?.title?.takeIf { targetMode == "detail" }
                         ?: "Nexus Toons",
-                    url = directPage?.url ?: universalPage?.url ?: destination,
+                    url = if (appendEntries) previousPage?.url ?: currentUrl
+                        else directPage?.url ?: universalPage?.url ?: destination,
                     entries = mergedEntries,
                     readerImages = mergedImages,
                     chapters = mergedChapters,
                     genres = directPage?.genres.orEmpty().distinctBy { it.url }.take(40),
-                    nextPageUrl = directPage?.nextPageUrl,
+                    nextPageUrl = if (targetMode == "catalog") nextCatalogPageUrl else directPage?.nextPageUrl,
                     coverUrl = directPage?.coverUrl,
                     synopsis = directPage?.synopsis.orEmpty(),
                     author = directPage?.author.orEmpty(),
@@ -214,13 +239,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 // batch immediately. Do not navigate the hidden WebView just because some
                 // covers are missing; that caused the whole source page to reload on every click.
                 val needsExtraction = when {
+                    // Never mount/reload WebView just to fetch another catalogue page.
+                    appendEntries && targetMode == "catalog" -> false
                     targetMode == "reader" -> result.readerImages.isEmpty()
                     targetMode == "detail" -> result.chapters.isEmpty()
-                    appendEntries && targetMode == "catalog" -> freshEntries.isEmpty()
                     else -> freshEntries.isEmpty() || result.entries.size < 8 || poorCoverCoverage
                 }
                 if (appendEntries && targetMode == "catalog" && !needsExtraction) {
-                    hasMoreCatalogPages = mergedEntries.size > previousEntries.size
                     appendingCatalogPage = false
                     loadingMoreCatalog = false
                 }
@@ -230,17 +255,27 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 }
             } catch (e: Exception) {
                 error = e.localizedMessage ?: "O catálogo não conseguiu carregar esta página."
-                page = NexusPage(
-                    title = selectedWork?.title ?: "Nexus Toons",
-                    url = destination,
-                    entries = previousEntries,
-                    readerImages = emptyList(),
-                    chapters = emptyList()
-                )
-                accumulatedCatalogEntries = previousEntries
-                if (appendEntries && targetMode == "catalog") hasMoreCatalogPages = false
-                needsDomFallback = true
-                domFallbackLoading = true
+                if (appendEntries && targetMode == "catalog") {
+                    // Keep the visible grid intact if fetching a later page fails.
+                    hasMoreCatalogPages = false
+                    nextCatalogPageUrl = null
+                    appendingCatalogPage = false
+                    loadingMoreCatalog = false
+                    needsDomFallback = false
+                    domFallbackLoading = false
+                    domFallbackMessage = "Não foi possível carregar mais títulos. Os títulos anteriores foram mantidos."
+                } else {
+                    page = NexusPage(
+                        title = selectedWork?.title ?: "Nexus Toons",
+                        url = destination,
+                        entries = previousEntries,
+                        readerImages = emptyList(),
+                        chapters = emptyList()
+                    )
+                    accumulatedCatalogEntries = previousEntries
+                    needsDomFallback = true
+                    domFallbackLoading = true
+                }
             } finally {
                 loading = false
                 if (!domFallbackLoading) loadingMoreCatalog = false
@@ -645,12 +680,12 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 }
                             }
                         }
-                        val nextPage = loaded.nextPageUrl ?: NexusToonsAdapter.guessedNextPageUrl(currentUrl)
+                        val nextPage = nextCatalogPageUrl
                         item(span = { GridItemSpan(maxLineSpan) }) {
                             Button(
                                 onClick = {
                                     if (nextPage != null) {
-                                        load(nextPage, appendEntries = true, forcedMode = "catalog")
+                                        load(nextPage, saveHistory = false, appendEntries = true, forcedMode = "catalog")
                                     } else {
                                         domFallbackMessage = "Esta página não disponibilizou um link para carregar mais títulos."
                                     }
@@ -867,6 +902,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             val combinedImages = (extractedImages + oldPage?.readerImages.orEmpty()).distinct().take(150)
                                             val nextUrl = data.optString("nextPageUrl", "")
                                                 .takeIf { it.startsWith("https://") && NexusToonsAdapter.supports(it) }
+                                                ?: NexusToonsAdapter.guessedNextPageUrl(currentUrl)
+                                            nextCatalogPageUrl = nextUrl
+                                            hasMoreCatalogPages = nextUrl != null
                                             page = NexusPage(
                                                 title = data.optString("title", oldPage?.title ?: "Nexus Toons").ifBlank { "Nexus Toons" },
                                                 url = oldPage?.url ?: currentUrl,
