@@ -321,18 +321,12 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 val repeatedCovers = coverCounts.values.any { it >= 3 }
                 val poorCoverCoverage = result.entries.size >= 8 &&
                     (coverUrls.size < result.entries.size * 0.65 || repeatedCovers)
-                // Load-more must behave like the MangaDex grid: append the HTML-parser
-                // batch immediately. Do not navigate the hidden WebView just because some
-                // covers are missing; that caused the whole source page to reload on every click.
-                val hasApiCatalogBatch = targetMode == "catalog" &&
-                    directPage?.url.orEmpty().contains("blackmanga_api_page=")
+                // The API supplies the complete title list, but normally has no cover URLs.
+                // On the first catalogue load, scan the real WebView DOM to enrich those titles
+                // with covers. The DOM merge below starts from accumulatedCatalogEntries, so it
+                // adds artwork without replacing the 500 valid API titles with a partial DOM list.
+                // Never run this whole-page scan for "load more"; pagination stays API-only.
                 val needsExtraction = when {
-                    // The paged API is the authoritative catalogue list. Do not replace its
-                    // titles with a partially rendered infinite-scroll DOM while cover lookup
-                    // runs independently for each visible card.
-                    hasApiCatalogBatch -> false
-                    // Never mount/reload WebView on a "load more" click: that click only
-                    // fetches the next API batch and merges it into the visible list.
                     appendEntries && targetMode == "catalog" -> false
                     targetMode == "reader" -> result.readerImages.isEmpty()
                     targetMode == "detail" -> result.chapters.isEmpty()
