@@ -1012,8 +1012,20 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 if (old == null) previewByUrl[key] = fresh
                                                 else previewByUrl[matchingKey!!] = mergeNexusCover(old, fresh)
                                             }
-                                            val previewEntries = previewByUrl.values.toList()
+                                            val previewEntries = previewByUrl.values.toList().take(5000)
                                             val previewCovers = previewEntries.count { !it.imageUrl.isNullOrBlank() }
+
+                                            // Publish newly discovered covers immediately instead of waiting
+                                            // for every infinite-scroll pass to finish. The API remains the
+                                            // source of the full title list; the DOM enriches that list.
+                                            if (viewMode == "catalog" && previewCovers > 0) {
+                                                accumulatedCatalogEntries = previewEntries
+                                                page = page?.copy(
+                                                    entries = previewEntries,
+                                                    genres = (page?.genres.orEmpty() + extractedGenres).distinctBy { it.url }.take(40)
+                                                )
+                                            }
+
                                             val needsMoreCovers = viewMode == "catalog" &&
                                                 previewEntries.size >= 8 &&
                                                 previewCovers < (previewEntries.size * 0.65).toInt()
