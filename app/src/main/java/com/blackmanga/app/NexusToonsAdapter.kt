@@ -258,12 +258,13 @@ internal object NexusToonsAdapter {
                 val classes = (parent.className() + " " + parent.id()).lowercase()
                 val looksLikeCard = listOf("manga", "comic", "manhwa", "manhua", "book", "series", "swiper-slide", "post-item", "cover", "thumbnail", "entry-card", "item")
                     .any { classes.contains(it) } || parent.normalName() == "article" || parent.normalName() == "li"
-                val workLinks = parent.select("a[href*='/manga/']").size
+                // NexusToons does not use one URL pattern for every work; count
+                // the nearby card links instead of requiring href="/manga/...".
+                val cardLinks = parent.select("a[href]").size
                 val imageCount = parent.select(imageSelector).size
-                // Some cards use a CSS background or a <picture><source> instead of <img>.
-                looksLikeCard && workLinks in 1..3 && imageCount in 1..8
+                looksLikeCard && cardLinks in 1..8 && imageCount in 1..8
             } ?: anchor.parents().take(9).firstOrNull { parent ->
-                parent.select("a[href*='/manga/']").size == 1 &&
+                parent.select("a[href]").size in 1..8 &&
                     parent.select(imageSelector).isNotEmpty() &&
                     meaningfulHeading(parent) != null
             }
@@ -319,7 +320,10 @@ internal object NexusToonsAdapter {
         }
 
         val isCataloguePage = isCatalogueUrl(pageUrl)
-        val workEntries = document.select("a[href*='/manga/']")
+        // Catalogue works may use /serie/, /obra/, slugs, or a theme-specific route.
+        // Parse same-site anchors and let isContentLink/card checks reject menus and chapters.
+        val candidateWorkAnchors = if (isCataloguePage) document.select("a[href]") else emptyList()
+        val workEntries = candidateWorkAnchors
             .mapNotNull { anchor ->
                 val link = anchor.absUrl("href").substringBefore("#").trim()
                 if (link.isBlank()) return@mapNotNull null
