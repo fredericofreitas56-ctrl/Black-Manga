@@ -167,7 +167,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         }
                     ).distinctBy { it.url }
                 val mergedEntries = (previousEntries + freshEntries)
-                    .distinctBy { it.url }.take(500)
+                    .distinctBy { it.url }.take(5000)
                 accumulatedCatalogEntries = mergedEntries
                 val mergedChapters = directPage?.chapters.orEmpty().distinctBy { it.url }.take(600)
                 val mergedImages = (directPage?.readerImages.orEmpty() + universalPage?.readerImages.orEmpty())
@@ -817,7 +817,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                     )
                                                 }
                                             }
-                                            val combinedEntries = mergedEntryMap.values.toList().take(500)
+                                            val combinedEntries = mergedEntryMap.values.toList().take(5000)
                                             accumulatedCatalogEntries = combinedEntries
                                             val combinedChapters = (oldPage?.chapters.orEmpty() + extractedChapters)
                                                 .distinctBy { it.url }.take(600)
