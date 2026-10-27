@@ -253,15 +253,18 @@ internal object NexusToonsAdapter {
         }
 
         fun cardFor(anchor: Element): Element? {
-            return anchor.parents().take(9).firstOrNull { parent ->
+            val imageSelector = "img,source,[style*=background],[data-bg],[data-background],[data-cover],[data-thumb],[data-thumbnail]"
+            return anchor.parents().take(12).firstOrNull { parent ->
                 val classes = (parent.className() + " " + parent.id()).lowercase()
-                val looksLikeCard = listOf("manga", "comic", "manhwa", "manhua", "book", "series", "swiper-slide", "post-item", "cover", "thumbnail", "entry-card")
+                val looksLikeCard = listOf("manga", "comic", "manhwa", "manhua", "book", "series", "swiper-slide", "post-item", "cover", "thumbnail", "entry-card", "item")
                     .any { classes.contains(it) } || parent.normalName() == "article" || parent.normalName() == "li"
                 val workLinks = parent.select("a[href*='/manga/']").size
-                val imageCount = parent.select("img").size
-                looksLikeCard && workLinks in 1..3 && imageCount in 1..6
-            } ?: anchor.parents().take(6).firstOrNull { parent ->
-                parent.select("a[href*='/manga/']").size == 1 && parent.select("img").isNotEmpty() &&
+                val imageCount = parent.select(imageSelector).size
+                // Some cards use a CSS background or a <picture><source> instead of <img>.
+                looksLikeCard && workLinks in 1..3 && imageCount in 1..8
+            } ?: anchor.parents().take(9).firstOrNull { parent ->
+                parent.select("a[href*='/manga/']").size == 1 &&
+                    parent.select(imageSelector).isNotEmpty() &&
                     meaningfulHeading(parent) != null
             }
         }
