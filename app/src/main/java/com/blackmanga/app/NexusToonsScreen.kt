@@ -215,6 +215,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 }
                 if (appendEntries && targetMode == "catalog" && !needsExtraction) {
                     hasMoreCatalogPages = mergedEntries.size > previousEntries.size
+                    appendingCatalogPage = false
                 }
                 if (needsExtraction) {
                     needsDomFallback = true
