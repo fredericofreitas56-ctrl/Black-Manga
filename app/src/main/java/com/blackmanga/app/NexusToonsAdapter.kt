@@ -140,7 +140,76 @@ internal object NexusToonsAdapter {
         null
     } catch (_: Exception) { null }
 
-    suspend fun load(rawUrl: String): NexusPage = withContext(Dispatchers.IO) {
+    /**
+     * Kotatsu-style paging: try the source's explicit next link first, then likely
+     * query-based archive cursors. Accept a candidate only when it adds unseen works.
+     * The caller keeps the current grid visible while this batch is fetched.
+     */
+    suspend fun loadNextCataloguePage(
+        currentPageUrl: String,
+        preferredNextUrl: String?,
+        existingEntryUrls: Set<String>
+    ): NexusPage? = withContext(Dispatchers.IO) {
+        if (!supports(currentPageUrl)) return@withContext null
+        val current = runCatching { URI(currentPageUrl) }.getOrNull() ?: return@withContext null
+        val currentPath = current.path.orEmpty().trimEnd('/').ifBlank { "/" }
+        val currentPageNumber = Regex(
+            "(?:^|&)(?:updates_page|paged|page|pagina)=(\\d+)",
+            RegexOption.IGNORE_CASE
+        ).find(current.rawQuery.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: Regex("/(?:page|pagina)/(\\d+)$", RegexOption.IGNORE_CASE)
+                .find(currentPath)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: 1
+        val nextNumber = currentPageNumber + 1
+        val candidates = linkedSetOf<String>()
+
+        fun safeCandidate(raw: String?) {
+            if (raw.isNullOrBlank() || !supports(raw) || !raw.startsWith("https://")) return
+            val uri = runCatching { URI(raw) }.getOrNull() ?: return
+            val candidatePath = uri.path.orEmpty().trimEnd('/').ifBlank { "/" }
+            // We already observed that the home page's /page/2/ route returns 404.
+            if (currentPath == "/" && Regex("^/(?:page|pagina)/\\d+$", RegexOption.IGNORE_CASE).matches(candidatePath)) return
+            if (raw != currentPageUrl) candidates.add(raw)
+        }
+
+        safeCandidate(preferredNextUrl)
+        safeCandidate(guessedNextPageUrl(currentPageUrl))
+
+        fun addQueryCandidate(path: String, parameter: String) {
+            val retained = current.rawQuery.orEmpty().split("&").filter { item ->
+                item.isNotBlank() && !Regex(
+                    "^(?:updates_page|paged|page|pagina)=",
+                    RegexOption.IGNORE_CASE
+                ).containsMatchIn(item)
+            }
+            val query = (retained + "$parameter=$nextNumber").joinToString("&")
+            val pathPart = if (path == "/") "/" else path
+            val candidate = current.scheme + "://" + current.rawAuthority + pathPart +
+                if (query.isBlank()) "" else "?$query"
+            safeCandidate(candidate)
+        }
+
+        for (parameter in listOf("updates_page", "page", "paged")) {
+            addQueryCandidate(currentPath, parameter)
+        }
+        if (currentPath == "/") {
+            // NexusToons documents /biblioteca as its series-list route; some deployments
+            // paginate that list separately from the homepage updates feed.
+            for (parameter in listOf("updates_page", "page", "paged")) {
+                addQueryCandidate("/biblioteca", parameter)
+            }
+        }
+
+        for (candidateUrl in candidates.take(7)) {
+            val candidatePage = runCatching { load(candidateUrl, timeoutMs = 8000) }.getOrNull() ?: continue
+            if (candidatePage.entries.any { it.url !in existingEntryUrls }) {
+                return@withContext candidatePage
+            }
+        }
+        null
+    }
+
+    suspend fun load(rawUrl: String, timeoutMs: Int = 20000): NexusPage = withContext(Dispatchers.IO) {
         val uri = URI(rawUrl.trim())
         require(uri.scheme.equals("https", true) && supports(rawUrl)) {
             "Usa uma URL HTTPS válida do Nexus Toons."
@@ -148,7 +217,7 @@ internal object NexusToonsAdapter {
 
         val document = Jsoup.connect(uri.toASCIIString())
             .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36")
-            .timeout(20000)
+            .timeout(timeoutMs)
             .followRedirects(true)
             .get()
 
