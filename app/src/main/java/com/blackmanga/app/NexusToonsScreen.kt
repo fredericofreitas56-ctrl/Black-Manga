@@ -89,6 +89,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     // Keep catalogue cards across page requests; page metadata may change without replacing the grid.
     var accumulatedCatalogEntries by remember(startUrl) { mutableStateOf<List<NexusEntry>>(emptyList()) }
     var resolvedCoverUrls by remember(startUrl) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var rejectedCoverUrls by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
     var coverLookupsInProgress by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
     // The screen URL stays on the first catalogue page; this cursor advances independently.
     var nextCatalogPageUrl by remember(startUrl) { mutableStateOf<String?>(null) }
@@ -151,6 +152,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 page = null
                 accumulatedCatalogEntries = emptyList()
                 resolvedCoverUrls = emptyMap()
+                rejectedCoverUrls = emptySet()
                 coverLookupsInProgress = emptySet()
                 nextCatalogPageUrl = null
                 currentCatalogPageUrl = destination
@@ -714,7 +716,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             coverLookupsInProgress = coverLookupsInProgress + entry.url
                                             try {
                                                 val cover = NexusToonsAdapter.fetchCoverForEntry(entry.url)
-                                                if (!cover.isNullOrBlank()) {
+                                                if (!cover.isNullOrBlank() && cover !in rejectedCoverUrls) {
                                                     resolvedCoverUrls = resolvedCoverUrls + (entry.url to cover)
                                                     val updatedEntries = accumulatedCatalogEntries.map { item ->
                                                         if (item.url == entry.url && item.imageUrl.isNullOrBlank()) {
@@ -743,8 +745,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
                                             contentScale = ContentScale.Crop,
                                             onError = {
-                                                // API image fields can contain a non-displayable URL.
-                                                // Clear it so the cover resolver runs for this title.
+                                                // API image fields can contain a URL which is not an image.
+                                                rejectedCoverUrls = rejectedCoverUrls + image
                                                 resolvedCoverUrls = resolvedCoverUrls - entry.url
                                                 accumulatedCatalogEntries = accumulatedCatalogEntries.map { item ->
                                                     if (item.url == entry.url) item.copy(imageUrl = null) else item
