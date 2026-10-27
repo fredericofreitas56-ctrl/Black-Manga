@@ -698,10 +698,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     val image = entry.imageUrl?.takeIf { it.isNotBlank() }
                                         ?: resolvedCoverUrls[entry.url]
-                                    if (image.isNullOrBlank() && entry.url !in coverLookupsInProgress) {
-                                        LaunchedEffect(entry.url, image) {
-                                            if (entry.url !in resolvedCoverUrls && entry.url !in coverLookupsInProgress) {
-                                                coverLookupsInProgress = coverLookupsInProgress + entry.url
+                                    LaunchedEffect(entry.url, image) {
+                                        if (image.isNullOrBlank() &&
+                                            entry.url !in resolvedCoverUrls &&
+                                            entry.url !in coverLookupsInProgress
+                                        ) {
+                                            coverLookupsInProgress = coverLookupsInProgress + entry.url
+                                            try {
                                                 val cover = NexusToonsAdapter.fetchCoverForEntry(entry.url)
                                                 if (!cover.isNullOrBlank()) {
                                                     resolvedCoverUrls = resolvedCoverUrls + (entry.url to cover)
@@ -715,6 +718,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                         if (item.url == entry.url && item.imageUrl.isNullOrBlank()) item.copy(imageUrl = cover) else item
                                                     })
                                                 }
+                                            } finally {
                                                 coverLookupsInProgress = coverLookupsInProgress - entry.url
                                             }
                                         }
