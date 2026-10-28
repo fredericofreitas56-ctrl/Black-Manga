@@ -216,7 +216,6 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 fallbackGenre = "Todos"
                 page = null
                 accumulatedCatalogEntries = emptyList()
-                resolvedCoverUrls = emptyMap()
                 rejectedCoverUrls = emptySet()
                 coverLookupFailures = emptySet()
                 coverLookupsInProgress = emptySet()
@@ -766,7 +765,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 colors = CardDefaults.cardColors(containerColor = Color.Transparent)
                             ) {
                                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    val image = sequenceOf(entry.imageUrl, resolvedCoverUrls[entry.url])
+                                    // Prefer a previously validated cover over raw API metadata.
+                                    // API image fields are occasionally HTML/placeholder URLs.
+                                    val image = sequenceOf(resolvedCoverUrls[entry.url], entry.imageUrl)
                                         .filterNotNull()
                                         .map { it.trim() }
                                         .firstOrNull { it.isNotBlank() && it !in rejectedCoverUrls }
