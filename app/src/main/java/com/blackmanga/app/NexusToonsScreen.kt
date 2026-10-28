@@ -141,16 +141,14 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         )
     }
     LaunchedEffect(resolvedCoverUrls) {
-        // Do not overwrite a previously populated cache when load() temporarily clears
-        // the in-memory map while navigating/reloading a catalogue.
-        if (resolvedCoverUrls.isNotEmpty()) {
-            runCatching {
-                val json = JSONObject()
-                resolvedCoverUrls.forEach { (key, value) ->
-                    if (key.isNotBlank() && value.startsWith("https://")) json.put(key, value)
-                }
-                coverCachePreferences.edit().putString("resolved_covers_v1", json.toString()).apply()
+        // Persist both discovered covers and removals of invalid URLs. The cache is no
+        // longer cleared by ordinary navigation, so an empty map here is meaningful too.
+        runCatching {
+            val json = JSONObject()
+            resolvedCoverUrls.forEach { (key, value) ->
+                if (key.isNotBlank() && value.startsWith("https://")) json.put(key, value)
             }
+            coverCachePreferences.edit().putString("resolved_covers_v1", json.toString()).apply()
         }
     }
     var rejectedCoverUrls by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
