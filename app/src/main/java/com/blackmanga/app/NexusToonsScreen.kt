@@ -775,7 +775,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                         if (image.isNullOrBlank() &&
                                             !needsDomFallback &&
                                             !domFallbackLoading &&
-                                            entry.url !in resolvedCoverUrls &&
+                                            (entry.url !in resolvedCoverUrls ||
+                                                resolvedCoverUrls[entry.url] in rejectedCoverUrls) &&
                                             entry.url !in coverLookupFailures &&
                                             entry.url !in coverLookupsInProgress
                                         ) {
@@ -872,12 +873,14 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 // API image fields can contain a URL which is not an image.
                                                 rejectedCoverUrls = rejectedCoverUrls + image
                                                 coverLookupFailures = coverLookupFailures - entry.url
-                                                resolvedCoverUrls = resolvedCoverUrls - entry.url
+                                                // One failed network request is not proof that a saved
+                                                // cover URL is permanently invalid. Keep it in preferences;
+                                                // skip it for this screen and resolve an alternative instead.
                                                 accumulatedCatalogEntries = accumulatedCatalogEntries.map { item ->
-                                                    if (item.url == entry.url) item.copy(imageUrl = null) else item
+                                                    if (item.url == entry.url && item.imageUrl == image) item.copy(imageUrl = null) else item
                                                 }
                                                 page = page?.copy(entries = page?.entries.orEmpty().map { item ->
-                                                    if (item.url == entry.url) item.copy(imageUrl = null) else item
+                                                    if (item.url == entry.url && item.imageUrl == image) item.copy(imageUrl = null) else item
                                                 })
                                             }
                                         )
