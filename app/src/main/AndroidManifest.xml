@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <application
+        android:name=".BlackMangaApplication"
         android:allowBackup="true"
         android:label="Black Manga"
         android:supportsRtl="true"
