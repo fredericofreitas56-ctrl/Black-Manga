@@ -858,6 +858,16 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             contentDescription = entry.title,
                                             modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
                                             contentScale = ContentScale.Crop,
+                                            onSuccess = {
+                                                // Kotatsu keeps image loading in a shared loader. Also remember
+                                                // every URL that actually rendered, including API/DOM covers,
+                                                // so the next visit can restore it even if the API omits it.
+                                                if (image.startsWith("https://") &&
+                                                    resolvedCoverUrls[entry.url] != image
+                                                ) {
+                                                    resolvedCoverUrls = resolvedCoverUrls + (entry.url to image)
+                                                }
+                                            },
                                             onError = {
                                                 // API image fields can contain a URL which is not an image.
                                                 rejectedCoverUrls = rejectedCoverUrls + image
