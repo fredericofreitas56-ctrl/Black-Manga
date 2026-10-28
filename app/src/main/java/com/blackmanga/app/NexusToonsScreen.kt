@@ -763,8 +763,12 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 colors = CardDefaults.cardColors(containerColor = Color.Transparent)
                             ) {
                                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    // Prefer a previously validated cover over raw API metadata.
-                                    // API image fields are occasionally HTML/placeholder URLs.
+                                    // Read the actual image file from persistent app storage first.
+                                    // A saved file survives leaving and reopening this catalogue even
+                                    // if the source URL later expires or stops serving the cover.
+                                    var cachedCoverFile by remember(entry.url) {
+                                        mutableStateOf(NexusCoverFileCache.existingFile(imageContext, entry.url))
+                                    }
                                     val image = sequenceOf(resolvedCoverUrls[entry.url], entry.imageUrl)
                                         .filterNotNull()
                                         .map { it.trim() }
@@ -772,7 +776,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     LaunchedEffect(entry.url, image, needsDomFallback, domFallbackLoading) {
                                         // Finish the shared WebView scan first; don't launch
                                         // one HTTP request per card while the scan is still moving.
-                                        if (image.isNullOrBlank() &&
+                                        if (cachedCoverFile == null &&
+                                            image.isNullOrBlank() &&
                                             !needsDomFallback &&
                                             !domFallbackLoading &&
                                             (entry.url !in resolvedCoverUrls ||
@@ -848,10 +853,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             }
                                         }
                                     }
-                                    if (!image.isNullOrBlank()) {
+                                    if (cachedCoverFile != null || !image.isNullOrBlank()) {
                                         AsyncImage(
                                             model = ImageRequest.Builder(imageContext)
-                                                .data(image)
+                                                .data(cachedCoverFile ?: image)
                                                 .setHeader("Referer", "https://nexustoons.com/")
                                                 .setHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36")
                                                 .crossfade(true)
@@ -859,29 +864,47 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             contentDescription = entry.title,
                                             modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
                                             contentScale = ContentScale.Crop,
-                                            onSuccess = {
-                                                // Kotatsu keeps image loading in a shared loader. Also remember
-                                                // every URL that actually rendered, including API/DOM covers,
-                                                // so the next visit can restore it even if the API omits it.
-                                                if (image.startsWith("https://") &&
-                                                    resolvedCoverUrls[entry.url] != image
-                                                ) {
-                                                    resolvedCoverUrls = resolvedCoverUrls + (entry.url to image)
+                                            onSuccess = { state ->
+                                                // Save the decoded image bytes, not only its URL. This is
+                                                // the key persistence fix: reopening the catalogue reads
+                                                // the saved file and does not have to redownload the cover.
+                                                if (cachedCoverFile == null && !image.isNullOrBlank()) {
+                                                    if (NexusCoverFileCache.save(
+                                                            imageContext,
+                                                            entry.url,
+                                                            state.result.drawable
+                                                        )
+                                                    ) {
+                                                        cachedCoverFile = NexusCoverFileCache.existingFile(
+                                                            imageContext,
+                                                            entry.url
+                                                        )
+                                                    }
+                                                    if (image.startsWith("https://") &&
+                                                        resolvedCoverUrls[entry.url] != image
+                                                    ) {
+                                                        resolvedCoverUrls = resolvedCoverUrls + (entry.url to image)
+                                                    }
                                                 }
                                             },
                                             onError = {
-                                                // API image fields can contain a URL which is not an image.
-                                                rejectedCoverUrls = rejectedCoverUrls + image
-                                                coverLookupFailures = coverLookupFailures - entry.url
-                                                // One failed network request is not proof that a saved
-                                                // cover URL is permanently invalid. Keep it in preferences;
-                                                // skip it for this screen and resolve an alternative instead.
-                                                accumulatedCatalogEntries = accumulatedCatalogEntries.map { item ->
-                                                    if (item.url == entry.url && item.imageUrl == image) item.copy(imageUrl = null) else item
+                                                if (cachedCoverFile != null) {
+                                                    // If a local file is corrupt, remove only that file and
+                                                    // fall back to the source URL on the next recomposition.
+                                                    NexusCoverFileCache.delete(imageContext, entry.url)
+                                                    cachedCoverFile = null
+                                                } else if (!image.isNullOrBlank()) {
+                                                    rejectedCoverUrls = rejectedCoverUrls + image
+                                                    coverLookupFailures = coverLookupFailures - entry.url
+                                                    // A network failure does not invalidate a previously
+                                                    // saved URL; remove only the matching in-memory entry.
+                                                    accumulatedCatalogEntries = accumulatedCatalogEntries.map { item ->
+                                                        if (item.url == entry.url && item.imageUrl == image) item.copy(imageUrl = null) else item
+                                                    }
+                                                    page = page?.copy(entries = page?.entries.orEmpty().map { item ->
+                                                        if (item.url == entry.url && item.imageUrl == image) item.copy(imageUrl = null) else item
+                                                    })
                                                 }
-                                                page = page?.copy(entries = page?.entries.orEmpty().map { item ->
-                                                    if (item.url == entry.url && item.imageUrl == image) item.copy(imageUrl = null) else item
-                                                })
                                             }
                                         )
                                     } else {
