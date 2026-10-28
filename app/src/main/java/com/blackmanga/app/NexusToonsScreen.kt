@@ -1,5 +1,9 @@
 package com.blackmanga.app
 
+import java.text.Normalizer
+import java.net.URI
+import java.net.URLDecoder
+
 import android.view.View
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -64,6 +68,39 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private fun nexusCatalogEntryKey(rawUrl: String): String =
+    rawUrl.trim().substringBefore("#").substringBefore("?")
+        .replace("https://www.", "https://", ignoreCase = true)
+        .replace("http://www.", "https://", ignoreCase = true)
+        .replace("http://", "https://", ignoreCase = true)
+        .trimEnd('/')
+        .lowercase()
+
+private fun nexusCatalogTitleKey(rawTitle: String): String =
+    Normalizer.normalize(rawTitle.trim(), Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "")
+        .lowercase()
+        .replace(Regex("[^a-z0-9]+"), "")
+
+private fun nexusCatalogSlugKey(rawUrl: String): String {
+    val path = runCatching { URI(rawUrl.trim().substringBefore("?").substringBefore("#")).path.orEmpty() }
+        .getOrDefault("")
+    val rawSlug = path.substringAfterLast('/')
+    val decoded = runCatching { URLDecoder.decode(rawSlug, "UTF-8") }.getOrDefault(rawSlug)
+    return nexusCatalogTitleKey(decoded.removeSuffix(".html").removeSuffix(".htm"))
+}
+
+private fun mergeNexusCover(target: NexusEntry, source: NexusEntry): NexusEntry =
+    target.copy(
+        imageUrl = source.imageUrl?.takeIf { it.isNotBlank() } ?: target.imageUrl,
+        description = target.description.ifBlank { source.description },
+        kind = target.kind.ifBlank { source.kind },
+        status = target.status.ifBlank { source.status },
+        rating = target.rating.ifBlank { source.rating },
+        chapterCount = target.chapterCount.ifBlank { source.chapterCount },
+        genres = (target.genres + source.genres).distinct()
+    )
+
 @Composable
 internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
@@ -75,8 +112,53 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     val paleCard = Color(0xFFFFEEE6)
 
     var currentUrl by remember(startUrl) { mutableStateOf(NexusToonsAdapter.normalizeCatalogueStart(startUrl)) }
+    var currentCatalogPageUrl by remember(startUrl) { mutableStateOf(NexusToonsAdapter.normalizeCatalogueStart(startUrl)) }
     var history by remember(startUrl) { mutableStateOf(emptyList<String>()) }
     var page by remember { mutableStateOf<NexusPage?>(null) }
+    // Keep catalogue cards across page requests; page metadata may change without replacing the grid.
+    var accumulatedCatalogEntries by remember(startUrl) { mutableStateOf<List<NexusEntry>>(emptyList()) }
+    // Keep discovered cover URLs on-device so leaving and reopening the catalogue does not
+    // throw away successful lookups. Cache only URLs; Compose/Coil still reloads the images.
+    val coverCachePreferences = remember(imageContext) {
+        imageContext.getSharedPreferences("nexus_toons_cover_cache", android.content.Context.MODE_PRIVATE)
+    }
+    var resolvedCoverUrls by remember(startUrl) {
+        mutableStateOf(
+            runCatching {
+                val saved = coverCachePreferences.getString("resolved_covers_v1", null)
+                if (saved.isNullOrBlank()) emptyMap() else {
+                    val json = JSONObject(saved)
+                    buildMap {
+                        val keys = json.keys()
+                        while (keys.hasNext()) {
+                            val key = keys.next()
+                            val value = json.optString(key)
+                            if (key.isNotBlank() && value.startsWith("https://")) put(key, value)
+                        }
+                    }
+                }
+            }.getOrDefault(emptyMap())
+        )
+    }
+    LaunchedEffect(resolvedCoverUrls) {
+        // Persist both discovered covers and removals of invalid URLs. The cache is no
+        // longer cleared by ordinary navigation, so an empty map here is meaningful too.
+        runCatching {
+            val json = JSONObject()
+            resolvedCoverUrls.forEach { (key, value) ->
+                if (key.isNotBlank() && value.startsWith("https://")) json.put(key, value)
+            }
+            coverCachePreferences.edit().putString("resolved_covers_v1", json.toString()).apply()
+        }
+    }
+    var rejectedCoverUrls by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
+    var coverLookupFailures by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
+    var coverLookupsInProgress by remember(startUrl) { mutableStateOf<Set<String>>(emptySet()) }
+    // The screen URL stays on the first catalogue page; this cursor advances independently.
+    var nextCatalogPageUrl by remember(startUrl) { mutableStateOf<String?>(null) }
+    var hasMoreCatalogPages by remember(startUrl) { mutableStateOf(true) }
+    var appendingCatalogPage by remember { mutableStateOf(false) }
+    var catalogEntryCountBeforeAppend by remember { mutableStateOf(0) }
     var viewMode by remember(startUrl) {
         mutableStateOf(
             when {
@@ -87,6 +169,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         )
     }
     var loading by remember { mutableStateOf(false) }
+    var loadingMoreCatalog by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf("Todos") }
@@ -113,28 +196,77 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             else -> "detail"
         }
         val previousPage = if (appendEntries) page else null
-        if (saveHistory && currentUrl != destination) history = history + currentUrl
+        val sourcePageForAppend = if (appendEntries) currentCatalogPageUrl else destination
+        val previousEntries = if (appendEntries) {
+            accumulatedCatalogEntries.ifEmpty { previousPage?.entries.orEmpty() }
+        } else emptyList()
+        val previousEntryUrls = previousEntries.mapTo(linkedSetOf()) { it.url }
+        if (saveHistory && !appendEntries && currentUrl != destination) history = history + currentUrl
         scope.launch {
-            loading = true
+            appendingCatalogPage = appendEntries && targetMode == "catalog"
+            catalogEntryCountBeforeAppend = previousEntries.size
+            loading = !appendEntries
+            loadingMoreCatalog = appendEntries && targetMode == "catalog"
             error = ""
-            filter = ""
-            typeFilter = "Todos"
-            fallbackGenre = "Todos"
-            page = null
-            selectedChapterUrl = null
-            selectedChapterTitle = ""
-            readerImages = emptyList()
-            if (targetMode != "reader") readerTitle = ""
+            if (!appendEntries) {
+                filter = ""
+                typeFilter = "Todos"
+                fallbackGenre = "Todos"
+                page = null
+                accumulatedCatalogEntries = emptyList()
+                rejectedCoverUrls = emptySet()
+                coverLookupFailures = emptySet()
+                coverLookupsInProgress = emptySet()
+                nextCatalogPageUrl = null
+                currentCatalogPageUrl = destination
+                hasMoreCatalogPages = true
+                readerImages = emptyList()
+                if (targetMode != "reader") readerTitle = ""
+                selectedChapterUrl = null
+                selectedChapterTitle = ""
+            }
             needsDomFallback = false
             domFallbackLoading = false
             domFallbackMessage = ""
-            currentUrl = destination
-            viewMode = targetMode
-            if (targetMode == "catalog") selectedWork = null
+            // Pagination is data-only: don't change currentUrl/viewMode or recreate the hidden WebView.
+            if (!appendEntries) {
+                currentUrl = destination
+                viewMode = targetMode
+                if (targetMode == "catalog") selectedWork = null
+            }
 
             try {
+                val requestedApiPage = Regex("[?&]blackmanga_api_page=(\\d+)", RegexOption.IGNORE_CASE)
+                    .find(destination)?.groupValues?.getOrNull(1)?.toIntOrNull()
                 val directPage: NexusPage? = try {
-                    NexusToonsAdapter.load(destination)
+                    when {
+                        appendEntries && targetMode == "catalog" ->
+                            NexusToonsAdapter.loadNextCataloguePage(
+                                currentPageUrl = sourcePageForAppend,
+                                preferredNextUrl = destination,
+                                existingEntryUrls = previousEntryUrls
+                            )
+                        targetMode == "catalog" -> {
+                            val apiPage = NexusToonsAdapter.loadApiCataloguePage(requestedApiPage ?: 1)
+                            if (apiPage != null) {
+                                val visualPage = runCatching {
+                                    NexusToonsAdapter.load("https://nexustoons.com/biblioteca", timeoutMs = 10000)
+                                }.getOrNull()
+                                if (visualPage == null) apiPage else {
+                                    val visualByUrl = visualPage.entries.associateBy { nexusCatalogEntryKey(it.url) }
+                                    val visualBySlug = visualPage.entries.groupBy { nexusCatalogSlugKey(it.url) }
+                                    val visualByTitle = visualPage.entries.groupBy { nexusCatalogTitleKey(it.title) }
+                                    apiPage.copy(entries = apiPage.entries.map { entry ->
+                                        val visual = visualByUrl[nexusCatalogEntryKey(entry.url)]
+                                            ?: visualBySlug[nexusCatalogSlugKey(entry.url)]?.firstOrNull()
+                                            ?: visualByTitle[nexusCatalogTitleKey(entry.title)]?.firstOrNull()
+                                        if (visual == null) entry else mergeNexusCover(entry, visual)
+                                    }, genres = visualPage.genres)
+                                }
+                            } else NexusToonsAdapter.load(destination)
+                        }
+                        else -> NexusToonsAdapter.load(destination)
+                    }
                 } catch (_: Exception) {
                     null
                 }
@@ -158,8 +290,35 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                             NexusEntry(entry.title, entry.url, entry.imageUrl, entry.description)
                         }
                     ).distinctBy { it.url }
-                val mergedEntries = (previousPage?.entries.orEmpty() + freshEntries)
-                    .distinctBy { it.url }.take(500)
+                val mergedEntries = (previousEntries + freshEntries)
+                    .distinctBy { it.url }.take(5000)
+                accumulatedCatalogEntries = mergedEntries
+                if (targetMode == "catalog") {
+                    if (!appendEntries) {
+                        currentCatalogPageUrl = directPage?.url ?: universalPage?.url ?: destination
+                    } else if (freshEntries.any { it.url !in previousEntryUrls }) {
+                        currentCatalogPageUrl = directPage?.url ?: destination
+                    }
+                }
+                val cursorBaseUrl = directPage?.url ?: destination
+                val nextCursor = (directPage?.nextPageUrl
+                    ?.takeIf { it != cursorBaseUrl && NexusToonsAdapter.supports(it) }
+                    ?: NexusToonsAdapter.guessedNextPageUrl(cursorBaseUrl))
+                if (targetMode == "catalog") {
+                    if (!appendEntries) {
+                        nextCatalogPageUrl = nextCursor
+                        hasMoreCatalogPages = nextCursor != null
+                    } else {
+                        val addedCount = freshEntries.count { fresh -> previousEntries.none { it.url == fresh.url } }
+                        hasMoreCatalogPages = addedCount > 0 && nextCursor != null
+                        nextCatalogPageUrl = nextCursor.takeIf { hasMoreCatalogPages }
+                        loadingMoreCatalog = false
+                        appendingCatalogPage = false
+                        if (addedCount == 0) {
+                            domFallbackMessage = "Esta página não trouxe títulos novos. Mantive os títulos que já estavam no catálogo."
+                        }
+                    }
+                }
                 val mergedChapters = directPage?.chapters.orEmpty().distinctBy { it.url }.take(600)
                 val mergedImages = (directPage?.readerImages.orEmpty() + universalPage?.readerImages.orEmpty())
                     .distinct().take(150)
@@ -168,12 +327,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         ?: universalPage?.title?.takeIf { it.isNotBlank() }
                         ?: selectedWork?.title?.takeIf { targetMode == "detail" }
                         ?: "Nexus Toons",
-                    url = directPage?.url ?: universalPage?.url ?: destination,
+                    url = if (appendEntries) previousPage?.url ?: currentUrl
+                        else directPage?.url ?: universalPage?.url ?: destination,
                     entries = mergedEntries,
                     readerImages = mergedImages,
                     chapters = mergedChapters,
                     genres = directPage?.genres.orEmpty().distinctBy { it.url }.take(40),
-                    nextPageUrl = directPage?.nextPageUrl,
+                    nextPageUrl = if (targetMode == "catalog") nextCatalogPageUrl else directPage?.nextPageUrl,
                     coverUrl = directPage?.coverUrl,
                     synopsis = directPage?.synopsis.orEmpty(),
                     author = directPage?.author.orEmpty(),
@@ -193,10 +353,20 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 val repeatedCovers = coverCounts.values.any { it >= 3 }
                 val poorCoverCoverage = result.entries.size >= 8 &&
                     (coverUrls.size < result.entries.size * 0.65 || repeatedCovers)
-                val needsExtraction = when (targetMode) {
-                    "reader" -> result.readerImages.isEmpty()
-                    "detail" -> result.chapters.isEmpty()
-                    else -> result.entries.size < 8 || poorCoverCoverage
+                // The API supplies the complete title list, but normally has no cover URLs.
+                // On the first catalogue load, scan the real WebView DOM to enrich those titles
+                // with covers. The DOM merge below starts from accumulatedCatalogEntries, so it
+                // adds artwork without replacing the 500 valid API titles with a partial DOM list.
+                // Never run this whole-page scan for "load more"; pagination stays API-only.
+                val needsExtraction = when {
+                    appendEntries && targetMode == "catalog" -> false
+                    targetMode == "reader" -> result.readerImages.isEmpty()
+                    targetMode == "detail" -> result.chapters.isEmpty()
+                    else -> freshEntries.isEmpty() || result.entries.size < 8 || poorCoverCoverage
+                }
+                if (appendEntries && targetMode == "catalog" && !needsExtraction) {
+                    appendingCatalogPage = false
+                    loadingMoreCatalog = false
                 }
                 if (needsExtraction) {
                     needsDomFallback = true
@@ -204,17 +374,30 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                 }
             } catch (e: Exception) {
                 error = e.localizedMessage ?: "O catálogo não conseguiu carregar esta página."
-                page = NexusPage(
-                    title = selectedWork?.title ?: "Nexus Toons",
-                    url = destination,
-                    entries = previousPage?.entries.orEmpty(),
-                    readerImages = emptyList(),
-                    chapters = emptyList()
-                )
-                needsDomFallback = true
-                domFallbackLoading = true
+                if (appendEntries && targetMode == "catalog") {
+                    // Keep the visible grid intact if fetching a later page fails.
+                    hasMoreCatalogPages = false
+                    nextCatalogPageUrl = null
+                    appendingCatalogPage = false
+                    loadingMoreCatalog = false
+                    needsDomFallback = false
+                    domFallbackLoading = false
+                    domFallbackMessage = "Não foi possível carregar mais títulos. Os títulos anteriores foram mantidos."
+                } else {
+                    page = NexusPage(
+                        title = selectedWork?.title ?: "Nexus Toons",
+                        url = destination,
+                        entries = previousEntries,
+                        readerImages = emptyList(),
+                        chapters = emptyList()
+                    )
+                    accumulatedCatalogEntries = previousEntries
+                    needsDomFallback = true
+                    domFallbackLoading = true
+                }
             } finally {
                 loading = false
+                if (!domFallbackLoading) loadingMoreCatalog = false
             }
         }
     }
@@ -227,7 +410,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             history = history.dropLast(1)
             load(previous, false)
         } else if (viewMode != "catalog") {
-            load("https://nexustoons.com/", false, forcedMode = "catalog")
+            load("https://nexustoons.com/biblioteca", false, forcedMode = "catalog")
         } else {
             onBack()
         }
@@ -554,19 +737,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                     // Não ocultar capas quando dois cartões partilham o mesmo URL.
 
                     Text(
-                        visibleEntries.size.toString() + " títulos",
+                        if (filter.isNotBlank() || typeFilter != "Todos" || fallbackGenre != "Todos")
+                            "${visibleEntries.size} títulos visíveis · ${loaded.entries.size} carregados"
+                        else "${loaded.entries.size} títulos carregados",
                         Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                         color = muted,
                         fontSize = 12.sp
                     )
-                    if (viewMode == "catalog" && domFallbackMessage.startsWith("DIAGNÓSTICO CAPAS:") && !domFallbackLoading) {
-                        Text(
-                            domFallbackMessage,
-                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 3.dp),
-                            color = Color(0xFFB53C32),
-                            fontSize = 10.sp
-                        )
-                    }
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(4),
                         modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -586,18 +763,149 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 colors = CardDefaults.cardColors(containerColor = Color.Transparent)
                             ) {
                                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    val image = entry.imageUrl?.takeIf { it.isNotBlank() }
-                                    if (!image.isNullOrBlank()) {
+                                    // Read the actual image file from persistent app storage first.
+                                    // A saved file survives leaving and reopening this catalogue even
+                                    // if the source URL later expires or stops serving the cover.
+                                    var cachedCoverFile by remember(entry.url) {
+                                        mutableStateOf(NexusCoverFileCache.existingFile(imageContext, entry.url))
+                                    }
+                                    val image = sequenceOf(resolvedCoverUrls[entry.url], entry.imageUrl)
+                                        .filterNotNull()
+                                        .map { it.trim() }
+                                        .firstOrNull { it.isNotBlank() && it !in rejectedCoverUrls }
+                                    LaunchedEffect(entry.url, image, needsDomFallback, domFallbackLoading) {
+                                        // Finish the shared WebView scan first; don't launch
+                                        // one HTTP request per card while the scan is still moving.
+                                        if (cachedCoverFile == null &&
+                                            image.isNullOrBlank() &&
+                                            !needsDomFallback &&
+                                            !domFallbackLoading &&
+                                            (entry.url !in resolvedCoverUrls ||
+                                                resolvedCoverUrls[entry.url] in rejectedCoverUrls) &&
+                                            entry.url !in coverLookupFailures &&
+                                            entry.url !in coverLookupsInProgress
+                                        ) {
+                                            coverLookupsInProgress = coverLookupsInProgress + entry.url
+                                            try {
+                                                val cover = NexusToonsAdapter.fetchCoverForEntry(entry.url)
+                                                if (!cover.isNullOrBlank() && cover !in rejectedCoverUrls) {
+                                                    resolvedCoverUrls = resolvedCoverUrls + (entry.url to cover)
+                                                    val updatedEntries = accumulatedCatalogEntries.map { item ->
+                                                        if (item.url == entry.url && item.imageUrl.isNullOrBlank()) {
+                                                            item.copy(imageUrl = cover)
+                                                        } else item
+                                                    }
+                                                    accumulatedCatalogEntries = updatedEntries
+                                                    page = page?.copy(entries = page?.entries.orEmpty().map { item ->
+                                                        if (item.url == entry.url && item.imageUrl.isNullOrBlank()) item.copy(imageUrl = cover) else item
+                                                    })
+                                                } else {
+                                                    // A detail page can hide its cover in JSON or lazy-load
+                                                    // markup that the first parser cannot recognize. Try the
+                                                    // live browser DOM once before marking this title failed.
+                                                    val fallback = runCatching {
+                                                        withContext(Dispatchers.IO) {
+                                                            val doc = org.jsoup.Jsoup.connect(entry.url)
+                                                                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                                                                .header("Referer", "https://nexustoons.com/biblioteca")
+                                                                .timeout(18000)
+                                                                .followRedirects(true)
+                                                                .ignoreHttpErrors(true)
+                                                                .get()
+                                                            val candidates = linkedSetOf<String>()
+                                                            doc.select("meta[property=og:image],meta[property=og:image:secure_url],meta[name=twitter:image],meta[name=twitter:image:src],meta[itemprop=image]").forEach { meta ->
+                                                                meta.attr("content").takeIf { it.isNotBlank() }?.let(candidates::add)
+                                                            }
+                                                            doc.select("img,source,[data-src],[data-lazy-src],[data-original],[data-cover],[data-thumb],[data-poster],[data-image-url],[data-thumbnail],[data-lazy-image],[style*=background-image],[data-bg],[data-background]").forEach { node ->
+                                                                listOf("data-cover","data-poster","data-thumb","data-image-url","data-thumbnail","data-lazy-image","data-src","data-lazy-src","data-original","data-srcset","data-lazy-srcset","srcset","src","content","data-bg","data-background").forEach { attr ->
+                                                                    val raw = node.attr(attr)
+                                                                    if (raw.isNotBlank()) {
+                                                                        raw.split(",").forEach { part ->
+                                                                            val candidate = part.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
+                                                                            if (candidate.isNotBlank()) candidates.add(candidate)
+                                                                        }
+                                                                    }
+                                                                }
+                                                                Regex("""url\\((?:['"])?(.*?)(?:['"])?\\)""", RegexOption.IGNORE_CASE).findAll(node.attr("style")).forEach { candidates.add(it.groupValues[1]) }
+                                                            }
+                                                            candidates.firstNotNullOfOrNull { raw ->
+                                                                val absolute = runCatching { java.net.URI(entry.url).resolve(java.net.URI(raw.replace("&amp;","&"))).toString() }.getOrNull()
+                                                                absolute?.takeIf { it.startsWith("https://") && it !in rejectedCoverUrls && !Regex("(?i)(logo|avatar|favicon|placeholder|sprite|blank\\.(gif|png|jpg))").containsMatchIn(it) }
+                                                            }
+                                                        }
+                                                    }.getOrNull()
+                                                    if (!fallback.isNullOrBlank() && fallback !in rejectedCoverUrls) {
+                                                        resolvedCoverUrls = resolvedCoverUrls + (entry.url to fallback)
+                                                        accumulatedCatalogEntries = accumulatedCatalogEntries.map { item ->
+                                                            if (item.url == entry.url && item.imageUrl.isNullOrBlank()) item.copy(imageUrl = fallback) else item
+                                                        }
+                                                        page = page?.copy(entries = page?.entries.orEmpty().map { item ->
+                                                            if (item.url == entry.url && item.imageUrl.isNullOrBlank()) item.copy(imageUrl = fallback) else item
+                                                        })
+                                                    } else {
+                                                        coverLookupFailures = coverLookupFailures + entry.url
+                                                    }
+                                                }
+                                            } catch (_: Exception) {
+                                                coverLookupFailures = coverLookupFailures + entry.url
+                                            } finally {
+                                                coverLookupsInProgress = coverLookupsInProgress - entry.url
+                                            }
+                                        }
+                                    }
+                                    if (cachedCoverFile != null || !image.isNullOrBlank()) {
                                         AsyncImage(
                                             model = ImageRequest.Builder(imageContext)
-                                                .data(image)
+                                                .data(cachedCoverFile ?: image)
                                                 .setHeader("Referer", "https://nexustoons.com/")
                                                 .setHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36")
                                                 .crossfade(true)
                                                 .build(),
                                             contentDescription = entry.title,
                                             modifier = Modifier.fillMaxWidth().aspectRatio(0.68f),
-                                            contentScale = ContentScale.Crop
+                                            contentScale = ContentScale.Crop,
+                                            onSuccess = { state ->
+                                                // Save the decoded image bytes, not only its URL. This is
+                                                // the key persistence fix: reopening the catalogue reads
+                                                // the saved file and does not have to redownload the cover.
+                                                if (cachedCoverFile == null && !image.isNullOrBlank()) {
+                                                    if (NexusCoverFileCache.save(
+                                                            imageContext,
+                                                            entry.url,
+                                                            state.result.drawable
+                                                        )
+                                                    ) {
+                                                        cachedCoverFile = NexusCoverFileCache.existingFile(
+                                                            imageContext,
+                                                            entry.url
+                                                        )
+                                                    }
+                                                    if (image.startsWith("https://") &&
+                                                        resolvedCoverUrls[entry.url] != image
+                                                    ) {
+                                                        resolvedCoverUrls = resolvedCoverUrls + (entry.url to image)
+                                                    }
+                                                }
+                                            },
+                                            onError = {
+                                                if (cachedCoverFile != null) {
+                                                    // If a local file is corrupt, remove only that file and
+                                                    // fall back to the source URL on the next recomposition.
+                                                    NexusCoverFileCache.delete(imageContext, entry.url)
+                                                    cachedCoverFile = null
+                                                } else if (!image.isNullOrBlank()) {
+                                                    rejectedCoverUrls = rejectedCoverUrls + image
+                                                    coverLookupFailures = coverLookupFailures - entry.url
+                                                    // A network failure does not invalidate a previously
+                                                    // saved URL; remove only the matching in-memory entry.
+                                                    accumulatedCatalogEntries = accumulatedCatalogEntries.map { item ->
+                                                        if (item.url == entry.url && item.imageUrl == image) item.copy(imageUrl = null) else item
+                                                    }
+                                                    page = page?.copy(entries = page?.entries.orEmpty().map { item ->
+                                                        if (item.url == entry.url && item.imageUrl == image) item.copy(imageUrl = null) else item
+                                                    })
+                                                }
+                                            }
                                         )
                                     } else {
                                         Box(
@@ -605,7 +913,13 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 .background(Color(0xFFFFE9DE), RoundedCornerShape(5.dp)),
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            Text("SEM CAPA", color = accent, fontSize = 9.sp)
+                                            if (entry.url in coverLookupsInProgress || domFallbackLoading || needsDomFallback) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(16.dp),
+                                                    color = accent,
+                                                    strokeWidth = 2.dp
+                                                )
+                                            }
                                         }
                                     }
                                     Text(
@@ -622,19 +936,35 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 }
                             }
                         }
-                        val nextPage = loaded.nextPageUrl ?: NexusToonsAdapter.guessedNextPageUrl(currentUrl)
+                        val nextPage = nextCatalogPageUrl
                         item(span = { GridItemSpan(maxLineSpan) }) {
                             Button(
                                 onClick = {
                                     if (nextPage != null) {
-                                        load(nextPage, appendEntries = true, forcedMode = "catalog")
+                                        load(nextPage, saveHistory = false, appendEntries = true, forcedMode = "catalog")
                                     } else {
                                         domFallbackMessage = "Esta página não disponibilizou um link para carregar mais títulos."
                                     }
                                 },
-                                enabled = nextPage != null && !loading,
+                                enabled = hasMoreCatalogPages && nextPage != null && !loading && !loadingMoreCatalog,
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                            ) { Text("Carregar mais títulos") }
+                            ) {
+                                if (loadingMoreCatalog) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                                        Spacer(Modifier.size(8.dp))
+                                        Text("A carregar mais títulos…")
+                                    }
+                                } else {
+                                    Text(
+                                        if (hasMoreCatalogPages && nextPage != null) "Carregar mais títulos"
+                                        else "Não foram encontrados mais títulos"
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -648,14 +978,6 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
             page?.entries.isNullOrEmpty() && page?.chapters.isNullOrEmpty() && readerImages.isEmpty()) {
             Text(domFallbackMessage, Modifier.padding(10.dp), color = muted, fontSize = 12.sp)
             TextButton(onClick = { load(currentUrl, false) }) { Text("Tentar novamente", color = accent) }
-        }
-        if (viewMode == "catalog" && domFallbackMessage.startsWith("DIAGNÓSTICO CAPAS:") && !domFallbackLoading) {
-            Text(
-                domFallbackMessage,
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                color = muted,
-                fontSize = 10.sp
-            )
         }
         }
 
@@ -696,7 +1018,20 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     var extractionAttempts = 0
                                     val accumulatedDomEntries = linkedMapOf<String, NexusEntry>()
                                     fun extractDomWhenReady() {
-                                        if (web.url != finishedUrl) return
+                                        // Infinite-scroll scripts may update the URL with history.replaceState
+                                        // while keeping the same page alive. Do not abandon the scan because
+                                        // web.url no longer equals the original onPageFinished URL.
+                                        val activeWebUrl = web.url ?: finishedUrl
+                                        if (!NexusToonsAdapter.supports(activeWebUrl)) {
+                                            domFallbackLoading = false
+                                            needsDomFallback = false
+                                            if (appendingCatalogPage) {
+                                                appendingCatalogPage = false
+                                                loadingMoreCatalog = false
+                                            }
+                                            domFallbackMessage = "A extração foi interrompida porque o site saiu do NexusToons."
+                                            return
+                                        }
                                         extractionAttempts += 1
                                         web.evaluateJavascript(NEXUS_DOM_EXTRACTION_SCRIPT) { raw ->
                                             val payload = try {
@@ -709,6 +1044,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 } else {
                                                     domFallbackLoading = false
                                                     needsDomFallback = false
+                                                    if (appendingCatalogPage) {
+                                                        hasMoreCatalogPages = false
+                                                        appendingCatalogPage = false
+                                                    }
                                                     domFallbackMessage = "Não foi possível reconhecer o catálogo. Tenta novamente."
                                                 }
                                                 return@evaluateJavascript
@@ -770,21 +1109,37 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             }
                                             val domEntries = accumulatedDomEntries.values.toList()
                                             val previewByUrl = linkedMapOf<String, NexusEntry>()
-                                            page?.entries.orEmpty().forEach { previewByUrl[it.url] = it }
+                                            accumulatedCatalogEntries.forEach { previewByUrl[nexusCatalogEntryKey(it.url)] = it }
+                                            page?.entries.orEmpty().forEach { previewByUrl[nexusCatalogEntryKey(it.url)] = it }
                                             domEntries.forEach { fresh ->
-                                                val old = previewByUrl[fresh.url]
-                                                previewByUrl[fresh.url] = if (old == null) fresh else old.copy(
-                                                    imageUrl = fresh.imageUrl?.takeIf { it.isNotBlank() } ?: old.imageUrl,
-                                                    description = old.description.ifBlank { fresh.description },
-                                                    kind = old.kind.ifBlank { fresh.kind },
-                                                    status = old.status.ifBlank { fresh.status },
-                                                    rating = old.rating.ifBlank { fresh.rating },
-                                                    chapterCount = old.chapterCount.ifBlank { fresh.chapterCount },
-                                                    genres = (old.genres + fresh.genres).distinct()
+                                                val key = nexusCatalogEntryKey(fresh.url)
+                                                val titleKey = nexusCatalogTitleKey(fresh.title)
+                                                val slugKey = nexusCatalogSlugKey(fresh.url)
+                                                val matchingKey = key.takeIf { previewByUrl.containsKey(it) }
+                                                    ?: previewByUrl.entries.firstOrNull { (_, existing) ->
+                                                        slugKey.isNotBlank() && slugKey == nexusCatalogSlugKey(existing.url)
+                                                    }?.key
+                                                    ?: previewByUrl.entries.firstOrNull { (_, existing) ->
+                                                        titleKey.length >= 4 && titleKey == nexusCatalogTitleKey(existing.title)
+                                                    }?.key
+                                                val old = matchingKey?.let { previewByUrl[it] }
+                                                if (old == null) previewByUrl[key] = fresh
+                                                else previewByUrl[matchingKey!!] = mergeNexusCover(old, fresh)
+                                            }
+                                            val previewEntries = previewByUrl.values.toList().take(5000)
+                                            val previewCovers = previewEntries.count { !it.imageUrl.isNullOrBlank() }
+
+                                            // Publish newly discovered covers immediately instead of waiting
+                                            // for every infinite-scroll pass to finish. The API remains the
+                                            // source of the full title list; the DOM enriches that list.
+                                            if (viewMode == "catalog" && previewCovers > 0) {
+                                                accumulatedCatalogEntries = previewEntries
+                                                page = page?.copy(
+                                                    entries = previewEntries,
+                                                    genres = (page?.genres.orEmpty() + extractedGenres).distinctBy { it.url }.take(40)
                                                 )
                                             }
-                                            val previewEntries = previewByUrl.values.toList()
-                                            val previewCovers = previewEntries.count { !it.imageUrl.isNullOrBlank() }
+
                                             val needsMoreCovers = viewMode == "catalog" &&
                                                 previewEntries.size >= 8 &&
                                                 previewCovers < (previewEntries.size * 0.65).toInt()
@@ -800,31 +1155,38 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
 
                                             val oldPage = page
                                             val mergedEntryMap = linkedMapOf<String, NexusEntry>()
-                                            oldPage?.entries.orEmpty().forEach { mergedEntryMap[it.url] = it }
+                                            accumulatedCatalogEntries.forEach { mergedEntryMap[nexusCatalogEntryKey(it.url)] = it }
+                                            oldPage?.entries.orEmpty().forEach { mergedEntryMap[nexusCatalogEntryKey(it.url)] = it }
                                             domEntries.forEach { fresh ->
-                                                val old = mergedEntryMap[fresh.url]
-                                                mergedEntryMap[fresh.url] = when {
-                                                    old == null -> fresh
-                                                    !fresh.imageUrl.isNullOrBlank() && fresh.imageUrl != old.imageUrl ->
-                                                        fresh.copy(title = old.title.ifBlank { fresh.title },
-                                                            description = fresh.description.ifBlank { old.description })
-                                                    else -> old.copy(
-                                                        imageUrl = old.imageUrl?.takeIf { it.isNotBlank() } ?: fresh.imageUrl,
-                                                        description = old.description.ifBlank { fresh.description },
-                                                        kind = old.kind.ifBlank { fresh.kind },
-                                                        status = old.status.ifBlank { fresh.status },
-                                                        rating = old.rating.ifBlank { fresh.rating },
-                                                        chapterCount = old.chapterCount.ifBlank { fresh.chapterCount },
-                                                        genres = (old.genres + fresh.genres).distinct()
-                                                    )
-                                                }
+                                                val key = nexusCatalogEntryKey(fresh.url)
+                                                val titleKey = nexusCatalogTitleKey(fresh.title)
+                                                val slugKey = nexusCatalogSlugKey(fresh.url)
+                                                val matchingKey = key.takeIf { mergedEntryMap.containsKey(it) }
+                                                    ?: mergedEntryMap.entries.firstOrNull { (_, existing) ->
+                                                        slugKey.isNotBlank() && slugKey == nexusCatalogSlugKey(existing.url)
+                                                    }?.key
+                                                    ?: mergedEntryMap.entries.firstOrNull { (_, existing) ->
+                                                        titleKey.length >= 4 && titleKey == nexusCatalogTitleKey(existing.title)
+                                                    }?.key
+                                                val old = matchingKey?.let { mergedEntryMap[it] }
+                                                if (old == null) mergedEntryMap[key] = fresh
+                                                else mergedEntryMap[matchingKey!!] = mergeNexusCover(old, fresh)
                                             }
-                                            val combinedEntries = mergedEntryMap.values.toList().take(500)
+                                            val combinedEntries = mergedEntryMap.values.toList().take(5000)
+                                            accumulatedCatalogEntries = combinedEntries
+                                            if (appendingCatalogPage) {
+                                                hasMoreCatalogPages = combinedEntries.size > catalogEntryCountBeforeAppend
+                                                appendingCatalogPage = false
+                                            }
                                             val combinedChapters = (oldPage?.chapters.orEmpty() + extractedChapters)
                                                 .distinctBy { it.url }.take(600)
                                             val combinedImages = (extractedImages + oldPage?.readerImages.orEmpty()).distinct().take(150)
-                                            val nextUrl = data.optString("nextPageUrl", "")
-                                                .takeIf { it.startsWith("https://") && NexusToonsAdapter.supports(it) }
+                                            val nextUrl = nextCatalogPageUrl
+                                                ?: NexusToonsAdapter.guessedNextPageUrl(currentUrl)
+                                                ?: data.optString("nextPageUrl", "")
+                                                    .takeIf { it.startsWith("https://") && NexusToonsAdapter.supports(it) }
+                                            nextCatalogPageUrl = nextUrl
+                                            hasMoreCatalogPages = nextUrl != null
                                             page = NexusPage(
                                                 title = data.optString("title", oldPage?.title ?: "Nexus Toons").ifBlank { "Nexus Toons" },
                                                 url = oldPage?.url ?: currentUrl,
@@ -841,7 +1203,10 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 rating = data.optString("rating", "").ifBlank { oldPage?.rating.orEmpty() },
                                                 chapterCount = data.optString("chapterCount", "").ifBlank { oldPage?.chapterCount.orEmpty() }
                                             )
-                                            if (combinedImages.isNotEmpty()) {
+                                            // A 404 page can contain a logo or an X image.
+                                            // Never interpret those assets as chapter pages unless the user
+                                            // explicitly opened a reader URL.
+                                            if (combinedImages.isNotEmpty() && NexusToonsAdapter.isReaderUrl(currentUrl)) {
                                                 readerImages = combinedImages
                                                 if (readerTitle.isBlank()) {
                                                     readerTitle = data.optString("title", oldPage?.title ?: "Capítulo").ifBlank { "Capítulo" }
@@ -952,7 +1317,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     /\/(page|pagina)\/\d+$/.test(currentPath) ||
     /(?:^|&)(?:page|paged)=\d+/i.test(location.search.slice(1));
   const isReader = /^\/r\//.test(location.pathname) ||
-    /\/(capitulo|chapter|leitura|reader|read|episode|episodio|page|pagina)\//i.test(location.pathname) ||
+    /\/(capitulo|chapter|leitura|reader|read|episode|episodio)\//i.test(location.pathname) ||
     /cap[ií]tulo|chapter|leitura|reader|epis[oó]dio/i.test(location.pathname);
   const sameSite = url => url && url.protocol === 'https:' && hostAllowed(url.hostname);
   const urlOf = anchor => {
@@ -1080,7 +1445,7 @@ private const val NEXUS_DOM_EXTRACTION_SCRIPT = """
     const visited = new Set();
     for (const root of roots) {
       if (!root || !root.querySelectorAll) continue;
-      const nodes = [root, ...Array.from(root.querySelectorAll('*')).slice(0, 180)];
+      const nodes = [root, ...Array.from(root.querySelectorAll('*')).slice(0, 1000)];
       for (const node of nodes) {
         if (visited.has(node)) continue;
         visited.add(node);
