@@ -32,6 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -52,6 +53,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -66,6 +68,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.withContext
 
 private fun nexusCatalogEntryKey(rawUrl: String): String =
@@ -105,6 +108,7 @@ private fun mergeNexusCover(target: NexusEntry, source: NexusEntry): NexusEntry 
 internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val imageContext = LocalContext.current
+    val catalogueGridState = rememberLazyGridState()
     val paper = Color(0xFFFFF8F5)
     val ink = Color(0xFF292321)
     val muted = Color(0xFF8A7268)
@@ -202,6 +206,12 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
         } else emptyList()
         val previousEntryUrls = previousEntries.mapTo(linkedSetOf()) { it.url }
         if (saveHistory && !appendEntries && currentUrl != destination) history = history + currentUrl
+        if (appendEntries && targetMode == "catalog") {
+            if (loadingMoreCatalog || !hasMoreCatalogPages) return
+            // Set this before launching the request so scroll events cannot enqueue duplicates.
+            appendingCatalogPage = true
+            loadingMoreCatalog = true
+        }
         scope.launch {
             appendingCatalogPage = appendEntries && targetMode == "catalog"
             catalogEntryCountBeforeAppend = previousEntries.size
@@ -744,7 +754,35 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         color = muted,
                         fontSize = 12.sp
                     )
+                    LaunchedEffect(
+                        catalogueGridState,
+                        visibleEntries.size,
+                        nextCatalogPageUrl,
+                        hasMoreCatalogPages,
+                        loadingMoreCatalog,
+                        loading,
+                        filter,
+                        typeFilter,
+                        fallbackGenre
+                    ) {
+                        // Load the next page only when the user is viewing the complete catalogue.
+                        // A local search/type/genre filter must never trigger hidden background pages.
+                        if (filter.isNotBlank() || typeFilter != "Todos" || fallbackGenre != "Todos" ||
+                            !hasMoreCatalogPages || nextCatalogPageUrl.isNullOrBlank() || loadingMoreCatalog || loading
+                        ) return@LaunchedEffect
+
+                        snapshotFlow {
+                            val lastVisibleIndex = catalogueGridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+                            lastVisibleIndex >= (visibleEntries.size - 8).coerceAtLeast(0)
+                        }.distinctUntilChanged().collect { nearEnd ->
+                            val next = nextCatalogPageUrl
+                            if (nearEnd && hasMoreCatalogPages && next != null && !loadingMoreCatalog && !loading) {
+                                load(next, saveHistory = false, appendEntries = true, forcedMode = "catalog")
+                            }
+                        }
+                    }
                     LazyVerticalGrid(
+                        state = catalogueGridState,
                         columns = GridCells.Fixed(4),
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 18.dp),
@@ -785,7 +823,11 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             entry.url !in coverLookupFailures &&
                                             entry.url !in coverLookupsInProgress
                                         ) {
-                                            coverLookupsInProgress = coverLookupsInProgress + entry.url
+                                            // Keep the lookup in the screen scope, not in the lazy card scope.
+                                            // LazyVerticalGrid disposes off-screen cards and cancels their LaunchedEffect.
+                                            val lookupEntryUrl = entry.url
+                                            coverLookupsInProgress = coverLookupsInProgress + lookupEntryUrl
+                                            scope.launch {
                                             try {
                                                 val cover = NexusToonsAdapter.fetchCoverForEntry(entry.url)
                                                 if (!cover.isNullOrBlank() && cover !in rejectedCoverUrls) {
@@ -849,7 +891,8 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                             } catch (_: Exception) {
                                                 coverLookupFailures = coverLookupFailures + entry.url
                                             } finally {
-                                                coverLookupsInProgress = coverLookupsInProgress - entry.url
+                                                coverLookupsInProgress = coverLookupsInProgress - lookupEntryUrl
+                                            }
                                             }
                                         }
                                     }
@@ -936,32 +979,21 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 }
                             }
                         }
-                        val nextPage = nextCatalogPageUrl
                         item(span = { GridItemSpan(maxLineSpan) }) {
-                            Button(
-                                onClick = {
-                                    if (nextPage != null) {
-                                        load(nextPage, saveHistory = false, appendEntries = true, forcedMode = "catalog")
-                                    } else {
-                                        domFallbackMessage = "Esta página não disponibilizou um link para carregar mais títulos."
-                                    }
-                                },
-                                enabled = hasMoreCatalogPages && nextPage != null && !loading && !loadingMoreCatalog,
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                            Box(
+                                Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                if (loadingMoreCatalog) {
-                                    Row(
-                                        horizontalArrangement = Arrangement.Center,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
-                                        Spacer(Modifier.size(8.dp))
-                                        Text("A carregar mais títulos…")
-                                    }
-                                } else {
-                                    Text(
-                                        if (hasMoreCatalogPages && nextPage != null) "Carregar mais títulos"
-                                        else "Não foram encontrados mais títulos"
+                                when {
+                                    loadingMoreCatalog -> CircularProgressIndicator(
+                                        modifier = Modifier.size(22.dp),
+                                        color = accent,
+                                        strokeWidth = 2.dp
+                                    )
+                                    !hasMoreCatalogPages -> Text(
+                                        "Fim do catálogo",
+                                        color = muted,
+                                        fontSize = 12.sp
                                     )
                                 }
                             }
