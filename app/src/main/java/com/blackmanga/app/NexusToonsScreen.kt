@@ -258,23 +258,11 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 existingEntryUrls = previousEntryUrls
                             )
                         targetMode == "catalog" -> {
+                            // The official API already returns title, slug and coverImage.
+                            // Do not download and parse the entire visual library on every page;
+                            // that duplicate request delayed first render and often added no new data.
                             val apiPage = NexusToonsAdapter.loadApiCataloguePage(requestedApiPage ?: 1)
-                            if (apiPage != null) {
-                                val visualPage = runCatching {
-                                    NexusToonsAdapter.load("https://nexustoons.com/biblioteca", timeoutMs = 10000)
-                                }.getOrNull()
-                                if (visualPage == null) apiPage else {
-                                    val visualByUrl = visualPage.entries.associateBy { nexusCatalogEntryKey(it.url) }
-                                    val visualBySlug = visualPage.entries.groupBy { nexusCatalogSlugKey(it.url) }
-                                    val visualByTitle = visualPage.entries.groupBy { nexusCatalogTitleKey(it.title) }
-                                    apiPage.copy(entries = apiPage.entries.map { entry ->
-                                        val visual = visualByUrl[nexusCatalogEntryKey(entry.url)]
-                                            ?: visualBySlug[nexusCatalogSlugKey(entry.url)]?.firstOrNull()
-                                            ?: visualByTitle[nexusCatalogTitleKey(entry.title)]?.firstOrNull()
-                                        if (visual == null) entry else mergeNexusCover(entry, visual)
-                                    }, genres = visualPage.genres)
-                                }
-                            } else NexusToonsAdapter.load(destination)
+                            apiPage ?: NexusToonsAdapter.load(destination)
                         }
                         else -> NexusToonsAdapter.load(destination)
                     }
