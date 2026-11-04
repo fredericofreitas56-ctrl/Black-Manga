@@ -51,7 +51,7 @@ internal object NexusToonsAdapter {
     private const val API_ROOT = "https://nexustoons.com/api/"
     private const val API_APP_KEY = "NxT_s3cur3_k3y_2026!xK9mPqL"
     private const val API_CRYPTO_SEED = "OrionNexus2025CryptoKey!Secure"
-    private const val API_PAGE_SIZE = 500
+    private const val API_PAGE_SIZE = 50
     // Limit concurrent detail-page requests so the source does not throttle cover lookups.
     private val coverRequestSemaphore = Semaphore(permits = 3)
 
@@ -217,9 +217,12 @@ internal object NexusToonsAdapter {
                 if (title.isBlank() || slug.isBlank()) continue
                 val titleUrl = "https://nexustoons.com/manga/$slug"
                 val chapterCount = item.optJSONArray("chapters")?.length()?.takeIf { it > 0 }?.toString().orEmpty()
+                // NexusToons' official source DTO exposes the catalogue artwork as coverImage.
+                // Keep aliases for older/API variants, but read the canonical field first.
                 val imageKeys = listOf(
-                    "coverUrl", "cover_url", "imageUrl", "image_url", "thumbnailUrl",
-                    "thumbnail_url", "posterUrl", "poster_url", "cover", "image", "thumbnail", "poster"
+                    "coverImage", "cover_image", "coverUrl", "cover_url", "imageUrl", "image_url",
+                    "thumbnailUrl", "thumbnail_url", "posterUrl", "poster_url",
+                    "cover", "image", "thumbnail", "poster"
                 )
                 val rawImage = imageKeys.firstNotNullOfOrNull { key ->
                     item.optString(key).trim().takeIf {
@@ -238,7 +241,14 @@ internal object NexusToonsAdapter {
                 add(NexusEntry(title = title, url = titleUrl, imageUrl = imageUrl, chapterCount = chapterCount))
             }
         }.distinctBy { it.url }
-        val nextCursor = if (data.length() >= API_PAGE_SIZE) {
+        val responsePage = payload.optInt("page", pageNumber)
+        val responsePages = payload.optInt("pages", responsePage)
+        val hasNextPage = if (payload.has("pages")) {
+            responsePage < responsePages
+        } else {
+            data.length() >= API_PAGE_SIZE
+        }
+        val nextCursor = if (hasNextPage) {
             "https://nexustoons.com/biblioteca?blackmanga_api_page=${pageNumber + 1}"
         } else null
         NexusPage(
@@ -271,18 +281,64 @@ internal object NexusToonsAdapter {
      * Resolve a series cover from its own public detail page. API catalogue records
      * include a title and slug but usually omit the cover URL.
      */
+    /**
+     * The official NexusToons connector obtains artwork from /api/manga/{slug}.
+     * Prefer this small JSON response over loading a full HTML detail page.
+     */
+    private fun fetchApiCoverForEntry(pageUrl: URI): String? {
+        val slug = pageUrl.rawPath.orEmpty().trimEnd('/').substringAfterLast('/')
+            .takeIf { it.isNotBlank() } ?: return null
+        val endpoint = API_ROOT + "manga/" + slug
+        val body = runCatching {
+            Jsoup.connect(endpoint)
+                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                .header("X-App-Key", API_APP_KEY)
+                .header("Accept", "application/json")
+                .header("Referer", "https://nexustoons.com/biblioteca")
+                .ignoreContentType(true)
+                .ignoreHttpErrors(true)
+                .timeout(8000)
+                .execute()
+                .also { response -> if (response.statusCode() !in 200..299) return null }
+                .body()
+        }.getOrNull() ?: return null
+        val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        val payload = if (root.has("d") && !root.isNull("d")) {
+            val decoded = runCatching {
+                decryptApiPayload(root.optString("d"), root.optInt("v", 1), root.optInt("k", 0))
+            }.getOrNull() ?: return null
+            runCatching { JSONObject(decoded) }.getOrNull() ?: return null
+        } else root
+        val detail = payload.optJSONObject("data")
+            ?: payload.optJSONObject("manga")
+            ?: payload
+        val rawImage = listOf(
+            "coverImage", "cover_image", "coverUrl", "cover_url",
+            "imageUrl", "image_url", "thumbnailUrl", "thumbnail_url"
+        ).firstNotNullOfOrNull { key ->
+            detail.optString(key).trim().takeIf {
+                it.isNotBlank() && it != "null" && it != "undefined"
+            }
+        } ?: return null
+        return runCatching {
+            URI("https://$HOST/").resolve(URI(rawImage)).toString()
+        }.getOrNull()?.takeIf { it.startsWith("https://", true) }
+    }
+
     suspend fun fetchCoverForEntry(rawUrl: String): String? =
         coverRequestSemaphore.withPermit {
             withContext(Dispatchers.IO) {
                 if (!supports(rawUrl)) return@withContext null
                 val pageUrl = runCatching { URI(rawUrl) }.getOrNull() ?: return@withContext null
+                val apiCover = runCatching { fetchApiCoverForEntry(pageUrl) }.getOrNull()
+                if (!apiCover.isNullOrBlank()) return@withContext apiCover
                 val document = runCatching {
                     Jsoup.connect(pageUrl.toASCIIString())
                         .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
                         .header("Referer", "https://nexustoons.com/biblioteca")
                         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
                         .header("Accept-Language", "pt-PT,pt;q=0.9,en;q=0.8")
-                        .timeout(18000)
+                        .timeout(9000)
                         .followRedirects(true)
                         .ignoreHttpErrors(true)
                         .get()
@@ -430,14 +486,14 @@ internal object NexusToonsAdapter {
                     .distinctBy { it.url }
                     .sortedByDescending { it.score }
                     .asSequence()
-                    .take(8)
+                    .take(4)
                     .map { it.url }
                     .firstOrNull { imageUrl ->
                         runCatching {
                             val connection = (java.net.URL(imageUrl).openConnection() as java.net.HttpURLConnection).apply {
                                 requestMethod = "GET"
-                                connectTimeout = 3500
-                                readTimeout = 3500
+                                connectTimeout = 1500
+                                readTimeout = 1500
                                 instanceFollowRedirects = true
                                 setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
                                 setRequestProperty("Referer", "https://nexustoons.com/")
