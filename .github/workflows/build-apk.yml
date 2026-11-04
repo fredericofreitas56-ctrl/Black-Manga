@@ -3,7 +3,7 @@ name: Build Black Manga APK
 
 on:
   push:
-    branches: [main, kotatsu-parser-integration, rea-nexus-covers-infinite-scroll, rea-nexus-coverimage-api-fix]
+    branches: [main, kotatsu-parser-integration, rea-nexus-covers-infinite-scroll, rea-nexus-coverimage-api-fix, rea-nexus-chapters-api]
   workflow_dispatch:
 
 permissions:
