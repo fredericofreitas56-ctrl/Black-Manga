@@ -34,6 +34,8 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -258,11 +260,19 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                 existingEntryUrls = previousEntryUrls
                             )
                         targetMode == "catalog" -> {
-                            // The official API already returns title, slug and coverImage.
-                            // Do not download and parse the entire visual library on every page;
-                            // that duplicate request delayed first render and often added no new data.
+                            // The official API returns the complete, paged catalogue and coverImage.
                             val apiPage = NexusToonsAdapter.loadApiCataloguePage(requestedApiPage ?: 1)
                             apiPage ?: NexusToonsAdapter.load(destination)
+                        }
+                        targetMode == "detail" -> {
+                            // Read series details and every chapter from the official API first.
+                            NexusToonsAdapter.loadApiMangaDetails(destination)
+                                ?: NexusToonsAdapter.load(destination)
+                        }
+                        targetMode == "reader" -> {
+                            // The official chapter endpoint returns reader page URLs/page tokens.
+                            NexusToonsAdapter.loadApiChapterPages(destination)
+                                ?: NexusToonsAdapter.load(destination)
                         }
                         else -> NexusToonsAdapter.load(destination)
                     }
@@ -468,35 +478,29 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         color = Color(0xFFB8B5C5),
                         fontSize = 12.sp
                     )
-                    AndroidView(
+                    LazyColumn(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
-                        factory = { context ->
-                            WebView(context).apply {
-                                settings.javaScriptEnabled = false
-                                settings.domStorageEnabled = false
-                                settings.allowFileAccess = false
-                                settings.allowContentAccess = false
-                                webViewClient = WebViewClient()
-                                setBackgroundColor(android.graphics.Color.rgb(16, 16, 20))
-                                loadDataWithBaseURL(
-                                    "https://nexustoons.com/",
-                                    buildReaderHtml(readerTitle.ifBlank { "Capítulo" }, readerImages),
-                                    "text/html",
-                                    "UTF-8",
-                                    null
-                                )
-                            }
-                        },
-                        update = { view ->
-                            view.loadDataWithBaseURL(
-                                "https://nexustoons.com/",
-                                buildReaderHtml(readerTitle.ifBlank { "Capítulo" }, readerImages),
-                                "text/html",
-                                "UTF-8",
-                                null
+                        contentPadding = PaddingValues(bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        itemsIndexed(readerImages, key = { index, url -> "$index:$url" }) { _, imageUrl ->
+                            val apiKey = NexusToonsAdapter.apiImageKeyFor(imageUrl)
+                            AsyncImage(
+                                model = ImageRequest.Builder(imageContext)
+                                    .data(imageUrl)
+                                    .setHeader("Referer", "https://nexustoons.com/")
+                                    .setHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                                    .apply {
+                                        if (!apiKey.isNullOrBlank()) setHeader("X-App-Key", apiKey)
+                                    }
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = "Página do capítulo",
+                                modifier = Modifier.fillMaxWidth(),
+                                contentScale = ContentScale.FillWidth
                             )
                         }
-                    )
+                    }
                     Button(
                         onClick = { goBack() },
                         modifier = Modifier.fillMaxWidth().padding(10.dp)
