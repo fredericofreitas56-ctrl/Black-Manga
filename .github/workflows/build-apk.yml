@@ -2,7 +2,7 @@ name: Build Black Manga APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/asura-scans-catalog]
   workflow_dispatch:
 
 permissions:
