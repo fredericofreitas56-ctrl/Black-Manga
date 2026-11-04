@@ -113,6 +113,7 @@ private fun BlackMangaApp() {
     var activeCatalogUrl by remember { mutableStateOf<String?>(null) }
     var activeNexusUrl by remember { mutableStateOf<String?>(null) }
     var activeMangaDexUrl by remember { mutableStateOf<String?>(null) }
+    var activeAsuraUrl by remember { mutableStateOf<String?>(null) }
     var activeUniversalUrl by remember { mutableStateOf<String?>(null) }
     var translationInput by remember { mutableStateOf("") }
     val savedManga = remember {
@@ -124,6 +125,11 @@ private fun BlackMangaApp() {
                 .getStringSet("saved_sources", emptySet()).orEmpty()
             addAll(saved.sorted())
         }
+    }
+
+    if (activeAsuraUrl != null) {
+        AsuraScansScreen(startUrl = activeAsuraUrl.orEmpty(), onBack = { activeAsuraUrl = null })
+        return
     }
 
     if (activeMangaDexUrl != null) {
@@ -150,7 +156,7 @@ private fun BlackMangaApp() {
             startUrl = activeCatalogUrl.orEmpty(),
             savedItems = savedManga,
             onBack = { activeCatalogUrl = null },
-            onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else if (it.contains("vegitoons.black", true)) activeUniversalUrl = it else activeCatalogUrl = it },
+            onOpenCatalog = { if (MangaDexApi.supports(it)) activeMangaDexUrl = it else if (it.contains("asurascans.com", true) || it.contains("asuracomic.net", true)) activeAsuraUrl = it else if (NexusToonsAdapter.supports(it)) activeNexusUrl = it else if (it.contains("vegitoons.black", true)) activeUniversalUrl = it else activeCatalogUrl = it },
             onOpenUniversal = { activeUniversalUrl = it; activeCatalogUrl = null },
             onOpenWeb = { activeCatalogUrl = null; activeWebUrl = it },
             onSave = { item ->
@@ -204,7 +210,7 @@ private fun BlackMangaApp() {
                 Text("BM", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
             when (selectedTab) {
-                0 -> HomeScreen(onGoToSites = { selectedTab = 2 }, onGoToTranslate = { selectedTab = 3 }, onOpenMangaDex = { activeMangaDexUrl = "https://mangadex.org/" }, onOpenNexusToons = { activeNexusUrl = "https://nexustoons.com/" })
+                0 -> HomeScreen(onGoToSites = { selectedTab = 2 }, onGoToTranslate = { selectedTab = 3 }, onOpenMangaDex = { activeMangaDexUrl = "https://mangadex.org/" }, onOpenNexusToons = { activeNexusUrl = "https://nexustoons.com/" }, onOpenAsura = { activeAsuraUrl = "https://asurascans.com/" })
                 1 -> LibraryScreen(
                     items = savedManga,
                     onOpen = { activeUniversalUrl = it },
@@ -226,7 +232,7 @@ private fun BlackMangaApp() {
 }
 
 @Composable
-private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit, onOpenMangaDex: () -> Unit, onOpenNexusToons: () -> Unit) {
+private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit, onOpenMangaDex: () -> Unit, onOpenNexusToons: () -> Unit, onOpenAsura: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -241,6 +247,7 @@ private fun HomeScreen(onGoToSites: () -> Unit, onGoToTranslate: () -> Unit, onO
                 Button(onClick = onGoToSites) { Text("Adicionar um site") }
                 OutlinedButton(onClick = onOpenMangaDex, modifier = Modifier.fillMaxWidth()) { Text("Explorar catálogo MangaDex") }
                 Button(onClick = onOpenNexusToons, modifier = Modifier.fillMaxWidth()) { Text("Explorar catálogo Nexus Toons") }
+                OutlinedButton(onClick = onOpenAsura, modifier = Modifier.fillMaxWidth()) { Text("Explorar catálogo Asura Scans") }
             }
         }
         Text("FUNÇÕES PRINCIPAIS", fontWeight = FontWeight.Bold, color = accentColor)
@@ -413,6 +420,9 @@ private fun SourcesScreen(
         }
         Button(onClick = { onOpenCatalog("https://nexustoons.com/") }, modifier = Modifier.fillMaxWidth()) {
             Text("Abrir catálogo Nexus Toons integrado")
+        }
+        Button(onClick = { onOpenCatalog("https://asurascans.com/") }, modifier = Modifier.fillMaxWidth()) {
+            Text("Abrir catálogo Asura Scans integrado")
         }
         OutlinedTextField(
             value = url,
