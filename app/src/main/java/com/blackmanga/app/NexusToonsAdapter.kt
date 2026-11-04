@@ -532,10 +532,12 @@ internal object NexusToonsAdapter {
                 .find(it)?.groupValues?.getOrNull(1)?.toIntOrNull()
         }
         if (apiPageNumber != null) {
+            // Keep advancing according to the API's page/pages cursor even if a
+            // page overlaps the previous batch. Updated catalogue ordering can move
+            // titles between pages while the user is scrolling; duplicate-only pages
+            // must not make the rest of the library unreachable.
             val apiPage = loadApiCataloguePage(apiPageNumber)
-            if (apiPage != null && apiPage.entries.any { it.url !in existingEntryUrls }) {
-                return@withContext apiPage
-            }
+            if (apiPage != null) return@withContext apiPage
         }
         if (!supports(currentPageUrl)) return@withContext null
         val current = runCatching { URI(currentPageUrl) }.getOrNull() ?: return@withContext null
