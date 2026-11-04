@@ -1,4 +1,5 @@
 name: Build Black Manga APK
+# Build the NexusToons API cover and cache regression fixes on the dedicated REA branch.
 
 on:
   push:
