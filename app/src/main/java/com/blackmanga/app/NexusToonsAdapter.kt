@@ -188,7 +188,11 @@ internal object NexusToonsAdapter {
      */
     suspend fun loadApiCataloguePage(pageNumber: Int): NexusPage? = withContext(Dispatchers.IO) {
         if (pageNumber < 1) return@withContext null
-        val apiUrl = API_ROOT + "mangas?page=$pageNumber&limit=$API_PAGE_SIZE"
+        // Match the official NexusToons extension defaults so the app does not
+        // silently omit mature entries from the full catalogue.
+        val apiUrl = API_ROOT +
+            "mangas?page=$pageNumber&limit=$API_PAGE_SIZE" +
+            "&includeNsfw=true&sortBy=lastChapterAt&sortOrder=desc&categoryMode=or"
         val body = try {
             Jsoup.connect(apiUrl)
                 .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
@@ -250,7 +254,7 @@ internal object NexusToonsAdapter {
             data.length() >= API_PAGE_SIZE
         }
         val nextCursor = if (hasNextPage) {
-            "https://nexustoons.com/biblioteca?blackmanga_api_page=${pageNumber + 1}"
+            "https://nexustoons.com/biblioteca?blackmanga_api_page=${responsePage + 1}"
         } else null
         NexusPage(
             title = "Biblioteca Nexus Toons",
