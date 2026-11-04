@@ -290,7 +290,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         }
                     ).distinctBy { it.url }
                 val mergedEntries = (previousEntries + freshEntries)
-                    .distinctBy { it.url }.take(5000)
+                    .distinctBy { it.url }
                 accumulatedCatalogEntries = mergedEntries
                 if (targetMode == "catalog") {
                     if (!appendEntries) {
@@ -309,7 +309,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         hasMoreCatalogPages = nextCursor != null
                     } else {
                         val addedCount = freshEntries.count { fresh -> previousEntries.none { it.url == fresh.url } }
-                        hasMoreCatalogPages = addedCount > 0 && nextCursor != null
+                        // Server pagination is authoritative: even if this batch overlaps,
+                        // keep following its next-page cursor until the API says it is finished.
+                        hasMoreCatalogPages = nextCursor != null
                         nextCatalogPageUrl = nextCursor.takeIf { hasMoreCatalogPages }
                         loadingMoreCatalog = false
                         appendingCatalogPage = false
@@ -1108,7 +1110,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 if (old == null) previewByUrl[key] = fresh
                                                 else previewByUrl[matchingKey!!] = mergeNexusCover(old, fresh)
                                             }
-                                            val previewEntries = previewByUrl.values.toList().take(5000)
+                                            val previewEntries = previewByUrl.values.toList()
                                             val previewCovers = previewEntries.count { !it.imageUrl.isNullOrBlank() }
 
                                             // Publish newly discovered covers immediately instead of waiting
@@ -1154,7 +1156,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                 if (old == null) mergedEntryMap[key] = fresh
                                                 else mergedEntryMap[matchingKey!!] = mergeNexusCover(old, fresh)
                                             }
-                                            val combinedEntries = mergedEntryMap.values.toList().take(5000)
+                                            val combinedEntries = mergedEntryMap.values.toList()
                                             accumulatedCatalogEntries = combinedEntries
                                             if (appendingCatalogPage) {
                                                 hasMoreCatalogPages = combinedEntries.size > catalogEntryCountBeforeAppend
