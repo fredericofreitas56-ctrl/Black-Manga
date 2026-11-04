@@ -796,7 +796,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                     var cachedCoverFile by remember(entry.url) {
                                         mutableStateOf(NexusCoverFileCache.existingFile(imageContext, entry.url))
                                     }
-                                    val image = sequenceOf(resolvedCoverUrls[entry.url], entry.imageUrl)
+                                    // Prefer the current API artwork; a persisted URL is only a fallback.
+                                    // This prevents an old/stale URL from hiding a newer cover URL.
+                                    val image = sequenceOf(entry.imageUrl, resolvedCoverUrls[entry.url])
                                         .filterNotNull()
                                         .map { it.trim() }
                                         .firstOrNull { it.isNotBlank() && it !in rejectedCoverUrls }
@@ -927,6 +929,9 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                                     cachedCoverFile = null
                                                 } else if (!image.isNullOrBlank()) {
                                                     rejectedCoverUrls = rejectedCoverUrls + image
+                                                    if (resolvedCoverUrls[entry.url] == image) {
+                                                        resolvedCoverUrls = resolvedCoverUrls - entry.url
+                                                    }
                                                     coverLookupFailures = coverLookupFailures - entry.url
                                                     // A network failure does not invalidate a previously
                                                     // saved URL; remove only the matching in-memory entry.
