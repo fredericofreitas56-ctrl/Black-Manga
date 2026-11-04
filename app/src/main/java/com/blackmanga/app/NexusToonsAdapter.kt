@@ -370,14 +370,6 @@ internal object NexusToonsAdapter {
             }
         }.distinctBy { it.url }
 
-        val categories = detail.optJSONArray("categories") ?: JSONArray()
-        val genreNames = buildList {
-            for (index in 0 until categories.length()) {
-                val category = categories.optJSONObject(index) ?: continue
-                category.optString("name").trim().takeIf { it.isNotBlank() && it != "null" }?.let(::add)
-            }
-        }.distinct()
-
         val author = listOf(detail.optString("author"), detail.optString("artist"))
             .map { it.trim() }.filter { it.isNotBlank() && it != "null" }
             .distinct().joinToString(" · ")
