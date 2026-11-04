@@ -201,7 +201,7 @@ internal fun AsuraScansScreen(startUrl: String, onBack: () -> Unit) {
 
         if (pages.isNotEmpty()) {
             Text(pages.size.toString() + " páginas", Modifier.padding(12.dp), color = Color(0xFF805A49))
-            AndroidView(Modifier.weight(1f).fillMaxWidth(), factory = { ctx ->
+            AndroidView(modifier = Modifier.weight(1f).fillMaxWidth(), factory = { ctx ->
                 WebView(ctx).apply {
                     settings.javaScriptEnabled = false
                     webViewClient = WebViewClient()
