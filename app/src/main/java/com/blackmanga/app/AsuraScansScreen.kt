@@ -72,8 +72,14 @@ private object AsuraScansApi {
             val slug = o.optString("slug").ifBlank { o.optString("public_url").trimEnd('/').substringAfterLast('/') }
             val title = o.optString("title").trim()
             if (slug.isBlank() || title.isBlank()) return@mapNotNull null
-            AsuraSeries(slug, title, o.optString("coverUrl").ifBlank { o.optString("cover_url") },
-                o.optString("public_url").ifBlank { "/comics/" + slug })
+            val rawCover = o.optString("cover").ifBlank { o.optString("coverUrl").ifBlank { o.optString("cover_url") } }
+            val cover = when {
+                rawCover.startsWith("http") -> rawCover
+                rawCover.startsWith("/") -> SITE + rawCover
+                else -> rawCover
+            }
+            val publicUrl = o.optString("public_url").ifBlank { o.optString("publicUrl") }.ifBlank { "/comics/" + slug }
+            AsuraSeries(slug, title, cover, publicUrl)
         }
         Pair(rows, root.optJSONObject("meta")?.optBoolean("has_more") ?: (rows.size == LIMIT))
     }
@@ -169,6 +175,18 @@ private object AsuraScansApi {
         while (it.hasNext()) {
             val v = root.opt(it.next())
             if (v is JSONObject) findArray(v, name)?.let { found -> return found }
+            if (v is JSONArray) {
+                for (i in 0 until v.length()) {
+                    val child = v.opt(i)
+                    if (child is JSONObject) findArray(child, name)?.let { found -> return found }
+                    if (child is JSONArray) {
+                        for (j in 0 until child.length()) {
+                            val nested = child.opt(j)
+                            if (nested is JSONObject) findArray(nested, name)?.let { found -> return found }
+                        }
+                    }
+                }
+            }
         }
         return null
     }
