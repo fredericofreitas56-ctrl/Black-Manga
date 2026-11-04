@@ -1,6 +1,12 @@
 package com.blackmanga.app
 
 import android.graphics.Color as AndroidColor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Rect
+import java.io.ByteArrayOutputStream
+import android.util.Base64
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
@@ -99,10 +105,44 @@ private object AsuraScansApi {
             val o = arr.optJSONObject(i) ?: continue
             val url = o.optString("url")
             if (!url.startsWith("https://")) continue
-            if ((o.optJSONArray("tiles")?.length() ?: 0) > 0) { skipped++; continue }
-            urls.add(url)
+            val tiles = o.optJSONArray("tiles")
+            if (tiles != null && tiles.length() > 0) {
+                val order = (0 until tiles.length()).map { tiles.optInt(it) }
+                val cols = o.optInt("tile_cols", 4).coerceAtLeast(1)
+                val rows = o.optInt("tile_rows", 5).coerceAtLeast(1)
+                urls.add(rebuildTiles(url, order, cols, rows))
+            } else urls.add(url)
         }
         Pair(urls, skipped)
+    }
+
+    private fun rebuildTiles(url: String, order: List<Int>, cols: Int, rows: Int): String {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connectTimeout = 15000
+        connection.readTimeout = 25000
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+        connection.setRequestProperty("Referer", SITE + "/")
+        val bytes = try { connection.inputStream.use { it.readBytes() } } finally { connection.disconnect() }
+        val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: error("Imagem em mosaicos inválida.")
+        val tileW = source.width / cols
+        val tileH = source.height / rows
+        val result = Bitmap.createBitmap(tileW * cols, tileH * rows, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(result)
+        order.forEachIndexed { sourceIndex, destinationIndex ->
+            if (destinationIndex in 0 until (cols * rows)) {
+                val src = Rect((sourceIndex % cols) * tileW, (sourceIndex / cols) * tileH,
+                    ((sourceIndex % cols) + 1) * tileW, ((sourceIndex / cols) + 1) * tileH)
+                val dst = Rect((destinationIndex % cols) * tileW, (destinationIndex / cols) * tileH,
+                    ((destinationIndex % cols) + 1) * tileW, ((destinationIndex / cols) + 1) * tileH)
+                canvas.drawBitmap(source, src, dst, null)
+            }
+        }
+        val output = ByteArrayOutputStream()
+        result.compress(Bitmap.CompressFormat.JPEG, 92, output)
+        source.recycle()
+        result.recycle()
+        return "data:image/jpeg;base64," + Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
     }
 
     private fun astroProp(doc: org.jsoup.nodes.Document, vararg names: String): JSONObject {
