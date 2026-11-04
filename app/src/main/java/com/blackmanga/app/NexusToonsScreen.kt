@@ -802,88 +802,44 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                                         .filterNotNull()
                                         .map { it.trim() }
                                         .firstOrNull { it.isNotBlank() && it !in rejectedCoverUrls }
-                                    LaunchedEffect(entry.url, image, needsDomFallback, domFallbackLoading) {
-                                        // Finish the shared WebView scan first; don't launch
-                                        // one HTTP request per card while the scan is still moving.
+                                    LaunchedEffect(entry.url, image) {
+                                        // Resolve covers immediately, even while the visual DOM fallback
+                                        // is scanning. The adapter tries the official detail API first,
+                                        // then performs one bounded HTML fallback if the API has no cover.
                                         if (cachedCoverFile == null &&
                                             image.isNullOrBlank() &&
-                                            !needsDomFallback &&
-                                            !domFallbackLoading &&
                                             (entry.url !in resolvedCoverUrls ||
                                                 resolvedCoverUrls[entry.url] in rejectedCoverUrls) &&
                                             entry.url !in coverLookupFailures &&
                                             entry.url !in coverLookupsInProgress
                                         ) {
                                             // Keep the lookup in the screen scope, not in the lazy card scope.
-                                            // LazyVerticalGrid disposes off-screen cards and cancels their LaunchedEffect.
+                                            // LazyVerticalGrid may dispose off-screen cards while a request is in flight.
                                             val lookupEntryUrl = entry.url
                                             coverLookupsInProgress = coverLookupsInProgress + lookupEntryUrl
                                             scope.launch {
-                                            try {
-                                                val cover = NexusToonsAdapter.fetchCoverForEntry(entry.url)
-                                                if (!cover.isNullOrBlank() && cover !in rejectedCoverUrls) {
-                                                    resolvedCoverUrls = resolvedCoverUrls + (entry.url to cover)
-                                                    val updatedEntries = accumulatedCatalogEntries.map { item ->
-                                                        if (item.url == entry.url && item.imageUrl.isNullOrBlank()) {
-                                                            item.copy(imageUrl = cover)
-                                                        } else item
-                                                    }
-                                                    accumulatedCatalogEntries = updatedEntries
-                                                    page = page?.copy(entries = page?.entries.orEmpty().map { item ->
-                                                        if (item.url == entry.url && item.imageUrl.isNullOrBlank()) item.copy(imageUrl = cover) else item
-                                                    })
-                                                } else {
-                                                    // A detail page can hide its cover in JSON or lazy-load
-                                                    // markup that the first parser cannot recognize. Try the
-                                                    // live browser DOM once before marking this title failed.
-                                                    val fallback = runCatching {
-                                                        withContext(Dispatchers.IO) {
-                                                            val doc = org.jsoup.Jsoup.connect(entry.url)
-                                                                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
-                                                                .header("Referer", "https://nexustoons.com/biblioteca")
-                                                                .timeout(18000)
-                                                                .followRedirects(true)
-                                                                .ignoreHttpErrors(true)
-                                                                .get()
-                                                            val candidates = linkedSetOf<String>()
-                                                            doc.select("meta[property=og:image],meta[property=og:image:secure_url],meta[name=twitter:image],meta[name=twitter:image:src],meta[itemprop=image]").forEach { meta ->
-                                                                meta.attr("content").takeIf { it.isNotBlank() }?.let(candidates::add)
-                                                            }
-                                                            doc.select("img,source,[data-src],[data-lazy-src],[data-original],[data-cover],[data-thumb],[data-poster],[data-image-url],[data-thumbnail],[data-lazy-image],[style*=background-image],[data-bg],[data-background]").forEach { node ->
-                                                                listOf("data-cover","data-poster","data-thumb","data-image-url","data-thumbnail","data-lazy-image","data-src","data-lazy-src","data-original","data-srcset","data-lazy-srcset","srcset","src","content","data-bg","data-background").forEach { attr ->
-                                                                    val raw = node.attr(attr)
-                                                                    if (raw.isNotBlank()) {
-                                                                        raw.split(",").forEach { part ->
-                                                                            val candidate = part.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
-                                                                            if (candidate.isNotBlank()) candidates.add(candidate)
-                                                                        }
-                                                                    }
-                                                                }
-                                                                Regex("""url\\((?:['"])?(.*?)(?:['"])?\\)""", RegexOption.IGNORE_CASE).findAll(node.attr("style")).forEach { candidates.add(it.groupValues[1]) }
-                                                            }
-                                                            candidates.firstNotNullOfOrNull { raw ->
-                                                                val absolute = runCatching { java.net.URI(entry.url).resolve(java.net.URI(raw.replace("&amp;","&"))).toString() }.getOrNull()
-                                                                absolute?.takeIf { it.startsWith("https://") && it !in rejectedCoverUrls && !Regex("(?i)(logo|avatar|favicon|placeholder|sprite|blank\\.(gif|png|jpg))").containsMatchIn(it) }
-                                                            }
-                                                        }
-                                                    }.getOrNull()
-                                                    if (!fallback.isNullOrBlank() && fallback !in rejectedCoverUrls) {
-                                                        resolvedCoverUrls = resolvedCoverUrls + (entry.url to fallback)
+                                                try {
+                                                    val cover = NexusToonsAdapter.fetchCoverForEntry(lookupEntryUrl)
+                                                    if (!cover.isNullOrBlank() && cover !in rejectedCoverUrls) {
+                                                        resolvedCoverUrls = resolvedCoverUrls + (lookupEntryUrl to cover)
                                                         accumulatedCatalogEntries = accumulatedCatalogEntries.map { item ->
-                                                            if (item.url == entry.url && item.imageUrl.isNullOrBlank()) item.copy(imageUrl = fallback) else item
+                                                            if (item.url == lookupEntryUrl && item.imageUrl.isNullOrBlank()) {
+                                                                item.copy(imageUrl = cover)
+                                                            } else item
                                                         }
                                                         page = page?.copy(entries = page?.entries.orEmpty().map { item ->
-                                                            if (item.url == entry.url && item.imageUrl.isNullOrBlank()) item.copy(imageUrl = fallback) else item
+                                                            if (item.url == lookupEntryUrl && item.imageUrl.isNullOrBlank()) {
+                                                                item.copy(imageUrl = cover)
+                                                            } else item
                                                         })
                                                     } else {
-                                                        coverLookupFailures = coverLookupFailures + entry.url
+                                                        coverLookupFailures = coverLookupFailures + lookupEntryUrl
                                                     }
+                                                } catch (_: Exception) {
+                                                    coverLookupFailures = coverLookupFailures + lookupEntryUrl
+                                                } finally {
+                                                    coverLookupsInProgress = coverLookupsInProgress - lookupEntryUrl
                                                 }
-                                            } catch (_: Exception) {
-                                                coverLookupFailures = coverLookupFailures + entry.url
-                                            } finally {
-                                                coverLookupsInProgress = coverLookupsInProgress - lookupEntryUrl
-                                            }
                                             }
                                         }
                                     }
