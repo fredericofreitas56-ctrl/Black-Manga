@@ -236,7 +236,8 @@ internal object NexusToonsAdapter {
                     }
                 }
                 val imageUrl = rawImage?.let { raw ->
-                    runCatching { URI(API_ROOT).resolve(URI(raw)).toString() }.getOrNull()
+                    // coverImage is a site asset URL, not an API-relative path.
+                    runCatching { URI("https://$HOST/").resolve(URI(raw)).toString() }.getOrNull()
                 }?.takeIf { it.startsWith("https://", true) }
                 add(NexusEntry(title = title, url = titleUrl, imageUrl = imageUrl, chapterCount = chapterCount))
             }
