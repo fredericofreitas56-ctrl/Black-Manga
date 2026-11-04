@@ -330,7 +330,7 @@ internal fun NexusToonsScreen(startUrl: String, onBack: () -> Unit) {
                         }
                     }
                 }
-                val mergedChapters = directPage?.chapters.orEmpty().distinctBy { it.url }.take(600)
+                val mergedChapters = directPage?.chapters.orEmpty().distinctBy { it.url }
                 val mergedImages = (directPage?.readerImages.orEmpty() + universalPage?.readerImages.orEmpty())
                     .distinct().take(150)
                 val result = NexusPage(
