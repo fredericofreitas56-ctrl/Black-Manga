@@ -290,6 +290,185 @@ internal object NexusToonsAdapter {
      * The official NexusToons connector obtains artwork from /api/manga/{slug}.
      * Prefer this small JSON response over loading a full HTML detail page.
      */
+    private fun decodeApiObject(body: String): JSONObject? {
+        val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        if (!root.has("d") || root.isNull("d")) return root
+        val decoded = runCatching {
+            decryptApiPayload(root.optString("d"), root.optInt("v", 1), root.optInt("k", 0))
+        }.getOrNull() ?: return null
+        return runCatching { JSONObject(decoded) }.getOrNull()
+    }
+
+    private fun unwrapApiData(payload: JSONObject): JSONObject =
+        payload.optJSONObject("data") ?: payload.optJSONObject("manga") ?: payload
+
+    private fun resolveApiImage(raw: String): String? {
+        if (raw.isBlank() || raw == "null" || raw == "undefined") return null
+        return runCatching {
+            URI("https://$HOST/").resolve(URI(raw)).toString()
+        }.getOrNull()?.takeIf { it.startsWith("https://", true) }
+    }
+
+    /**
+     * Load all chapters and series metadata from the official NexusToons detail API.
+     * This is the same endpoint used by the maintained NexusToons source extension.
+     */
+    suspend fun loadApiMangaDetails(rawUrl: String): NexusPage? = withContext(Dispatchers.IO) {
+        if (!supports(rawUrl)) return@withContext null
+        val uri = runCatching { URI(rawUrl.trim()) }.getOrNull() ?: return@withContext null
+        val pathParts = uri.path.orEmpty().split('/').filter { it.isNotBlank() }
+        if (pathParts.firstOrNull()?.equals("manga", true) != true) return@withContext null
+        val slug = pathParts.getOrNull(1)?.trim().orEmpty()
+        if (slug.isBlank()) return@withContext null
+
+        val body = runCatching {
+            Jsoup.connect(API_ROOT + "manga/" + slug)
+                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                .header("X-App-Key", API_APP_KEY)
+                .header("Accept", "application/json")
+                .header("Referer", "https://nexustoons.com/")
+                .ignoreContentType(true)
+                .ignoreHttpErrors(true)
+                .timeout(12000)
+                .execute()
+                .also { if (it.statusCode() !in 200..299) return@withContext null }
+                .body()
+        }.getOrNull() ?: return@withContext null
+
+        val payload = decodeApiObject(body) ?: return@withContext null
+        val detail = unwrapApiData(payload)
+        val mangaSlug = detail.optString("slug").trim().ifBlank { slug }
+        val title = detail.optString("title").trim()
+        if (title.isBlank()) return@withContext null
+
+        val chaptersArray = detail.optJSONArray("chapters")
+            ?: payload.optJSONArray("chapters")
+            ?: JSONArray()
+        val chapters = buildList {
+            for (index in 0 until chaptersArray.length()) {
+                val item = chaptersArray.optJSONObject(index) ?: continue
+                val id = item.optString("id").trim()
+                if (id.isBlank() || id == "null") continue
+                val number = item.opt("number")?.toString()?.trim()
+                    ?.takeIf { it.isNotBlank() && it != "null" }.orEmpty()
+                val chapterTitle = item.optString("title").trim().takeIf {
+                    it.isNotBlank() && it != "null" && it != "undefined"
+                }.orEmpty()
+                val label = if (chapterTitle.isNotBlank()) {
+                    if (number.isNotBlank()) "$chapterTitle $number" else chapterTitle
+                } else {
+                    "Capítulo " + number.removeSuffix(".0").ifBlank { (index + 1).toString() }
+                }
+                val chapterUrl = "https://$HOST/read/$id/$mangaSlug"
+                add(
+                    NexusEntry(
+                        title = label,
+                        url = chapterUrl,
+                        description = item.optString("createdAt").takeIf { it != "null" }.orEmpty()
+                    )
+                )
+            }
+        }.distinctBy { it.url }
+
+        val categories = detail.optJSONArray("categories") ?: JSONArray()
+        val genreNames = buildList {
+            for (index in 0 until categories.length()) {
+                val category = categories.optJSONObject(index) ?: continue
+                category.optString("name").trim().takeIf { it.isNotBlank() && it != "null" }?.let(::add)
+            }
+        }.distinct()
+
+        val author = listOf(detail.optString("author"), detail.optString("artist"))
+            .map { it.trim() }.filter { it.isNotBlank() && it != "null" }
+            .distinct().joinToString(" · ")
+        val rawCover = listOf("coverImage", "cover_image", "coverUrl", "cover_url", "imageUrl", "image_url")
+            .firstNotNullOfOrNull { key ->
+                detail.optString(key).trim().takeIf { it.isNotBlank() && it != "null" && it != "undefined" }
+            }
+        val rawStatus = detail.optString("status").trim().lowercase()
+        val status = when (rawStatus) {
+            "ongoing" -> "Em andamento"
+            "completed" -> "Concluído"
+            "hiatus" -> "Em hiato"
+            "cancelled" -> "Cancelado"
+            else -> detail.optString("status").trim()
+        }
+        NexusPage(
+            title = title,
+            url = rawUrl,
+            entries = emptyList(),
+            readerImages = emptyList(),
+            chapters = chapters,
+            synopsis = detail.optString("description").takeIf { it != "null" }.orEmpty(),
+            author = author,
+            status = status,
+            kind = detail.optString("type").takeIf { it != "null" }.orEmpty(),
+            rating = detail.optString("rating").takeIf { it != "null" }.orEmpty(),
+            chapterCount = chapters.size.toString(),
+            coverUrl = rawCover?.let { resolveApiImage(it) }
+        )
+    }
+
+    /**
+     * Load the page list for a chapter using the official /api/read/{id} endpoint.
+     * When the API returns a page token instead of direct image URLs, use /api/p/{token}/{index}.
+     */
+    suspend fun loadApiChapterPages(rawUrl: String): NexusPage? = withContext(Dispatchers.IO) {
+        if (!supports(rawUrl)) return@withContext null
+        val uri = runCatching { URI(rawUrl.trim()) }.getOrNull() ?: return@withContext null
+        val pathParts = uri.path.orEmpty().split('/').filter { it.isNotBlank() }
+        val chapterId = when (pathParts.firstOrNull()?.lowercase()) {
+            "read" -> pathParts.getOrNull(1)
+            else -> null
+        }?.takeIf { it.isNotBlank() } ?: return@withContext null
+
+        val body = runCatching {
+            Jsoup.connect(API_ROOT + "read/" + chapterId)
+                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                .header("X-App-Key", API_APP_KEY)
+                .header("Accept", "application/json")
+                .header("Referer", rawUrl)
+                .ignoreContentType(true)
+                .ignoreHttpErrors(true)
+                .timeout(15000)
+                .execute()
+                .also { if (it.statusCode() !in 200..299) return@withContext null }
+                .body()
+        }.getOrNull() ?: return@withContext null
+
+        val payload = decodeApiObject(body) ?: return@withContext null
+        val data = unwrapApiData(payload)
+        val pages = data.optJSONArray("pages") ?: payload.optJSONArray("pages") ?: JSONArray()
+        val pageToken = data.optString("pageToken").takeIf { it.isNotBlank() && it != "null" }
+            ?: payload.optString("pageToken").takeIf { it.isNotBlank() && it != "null" }
+        val images = buildList {
+            for (index in 0 until pages.length()) {
+                val item = pages.optJSONObject(index)
+                val directUrl = item?.optString("imageUrl").orEmpty()
+                val imageUrl = resolveApiImage(directUrl)
+                    ?: pageToken?.let { API_ROOT + "p/" + it + "/" + index }
+                if (!imageUrl.isNullOrBlank()) add(imageUrl)
+            }
+        }.distinct()
+        if (images.isEmpty()) return@withContext null
+        NexusPage(
+            title = data.optString("title").takeIf { it.isNotBlank() && it != "null" }
+                ?: "Capítulo $chapterId",
+            url = rawUrl,
+            entries = emptyList(),
+            readerImages = images
+        )
+    }
+
+    /**
+     * Only the NexusToons page-proxy endpoint requires the app key while Coil loads it.
+     * Never attach this header to third-party image hosts.
+     */
+    fun apiImageKeyFor(rawUrl: String): String? = runCatching {
+        val uri = URI(rawUrl)
+        if (uri.host.equals(HOST, true) && uri.path.orEmpty().startsWith("/api/p/")) API_APP_KEY else null
+    }.getOrNull()
+
     private fun fetchApiCoverForEntry(pageUrl: URI): String? {
         val slug = pageUrl.rawPath.orEmpty().trimEnd('/').substringAfterLast('/')
             .takeIf { it.isNotBlank() } ?: return null
