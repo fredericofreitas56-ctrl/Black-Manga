@@ -41,6 +41,7 @@ import java.net.URLEncoder
 
 private data class AsuraSeries(val slug: String, val title: String, val cover: String, val publicUrl: String)
 private data class AsuraChapter(val number: String, val title: String, val locked: Boolean, val url: String)
+private data class AsuraGenre(val name: String, val slug: String)
 
 private object AsuraScansApi {
     private const val API = "https://api.asurascans.com/api"
@@ -52,8 +53,11 @@ private object AsuraScansApi {
         c.connectTimeout = 15000
         c.readTimeout = 20000
         c.instanceFollowRedirects = true
-        c.setRequestProperty("User-Agent", "BlackManga/0.5.7 Android")
-        c.setRequestProperty("Accept", "application/json,text/html")
+        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+        c.setRequestProperty("Accept", "application/json,text/html,application/xhtml+xml")
+        c.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+        c.setRequestProperty("Referer", SITE + "/")
+        c.setRequestProperty("Origin", SITE)
         try {
             val code = c.responseCode
             val stream = if (code in 200..299) c.inputStream else c.errorStream
@@ -63,9 +67,11 @@ private object AsuraScansApi {
         } finally { c.disconnect() }
     }
 
-    suspend fun catalog(query: String, offset: Int): Pair<List<AsuraSeries>, Boolean> = withContext(Dispatchers.IO) {
-        val q = if (query.isBlank()) "" else "&search=" + URLEncoder.encode(query.trim(), "UTF-8")
-        val root = JSONObject(get(API + "/series?offset=" + offset + "&limit=" + LIMIT + q))
+    suspend fun catalog(query: String, offset: Int, genre: String?, sort: String): Pair<List<AsuraSeries>, Boolean> = withContext(Dispatchers.IO) {
+        val params = mutableListOf("offset=$offset", "limit=$LIMIT", "sort=$sort", "order=desc")
+        if (query.isNotBlank()) params.add("search=" + URLEncoder.encode(query.trim(), "UTF-8"))
+        if (!genre.isNullOrBlank()) params.add("genres=" + URLEncoder.encode(genre, "UTF-8"))
+        val root = JSONObject(get(API + "/series?" + params.joinToString("&")))
         val data = root.optJSONArray("data") ?: JSONArray()
         val rows = (0 until data.length()).mapNotNull { i ->
             val o = data.optJSONObject(i) ?: return@mapNotNull null
@@ -84,9 +90,38 @@ private object AsuraScansApi {
         Pair(rows, root.optJSONObject("meta")?.optBoolean("has_more") ?: (rows.size == LIMIT))
     }
 
+    suspend fun genres(): List<AsuraGenre> = withContext(Dispatchers.IO) {
+        val doc = Jsoup.parse(get(SITE + "/browse"), SITE + "/")
+        val raw = doc.selectFirst("[props*=availableGenres]")?.attr("props") ?: return@withContext emptyList()
+        val root = unwrap(JSONTokener(raw).nextValue()) as? JSONObject ?: return@withContext emptyList()
+        val arr = findArray(root, "availableGenres") ?: return@withContext emptyList()
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val name = o.optString("name")
+            val slug = o.optString("slug")
+            if (name.isBlank() || slug.isBlank()) null else AsuraGenre(name, slug)
+        }
+    }
+
+    private fun getDocumentWithSlugFallback(slug: String): Pair<org.jsoup.nodes.Document, String> {
+        return try {
+            Jsoup.parse(get(SITE + "/comics/" + slug), SITE + "/") to slug
+        } catch (first: Exception) {
+            val stable = slug.replace(Regex("-[a-z0-9]{8}$"), "")
+            if (stable == slug) throw first
+            val doc = Jsoup.parse(get(SITE + "/comics/" + stable), SITE + "/")
+            val canonical = doc.selectFirst("link[rel=canonical]")?.absUrl("href")
+                ?.substringAfter("/comics/")?.substringBefore("/")?.takeIf { it.isNotBlank() } ?: stable
+            doc to canonical
+        }
+    }
+
     suspend fun chapters(series: AsuraSeries): List<AsuraChapter> = withContext(Dispatchers.IO) {
-        val slug = series.publicUrl.trimEnd('/').substringAfterLast('/').ifBlank { series.slug }
-        val doc = Jsoup.parse(get(SITE + "/comics/" + slug), SITE + "/")
+        val initialSlug = series.publicUrl.trimEnd('/').substringAfterLast('/').ifBlank { series.slug }
+        val (doc, fallbackSlug) = getDocumentWithSlugFallback(initialSlug)
+        val publicProps = runCatching { astroProp(doc, "publicUrl") }.getOrNull()
+        val currentSlug = publicProps?.let { findString(it, "publicUrl") }
+            ?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: fallbackSlug
         val props = astroProp(doc, "chapters")
         val arr = findArray(props, "chapters") ?: JSONArray()
         (0 until arr.length()).mapNotNull { i ->
@@ -97,7 +132,7 @@ private object AsuraScansApi {
             val early = o.optString("early_access_until")
             val earlyLocked = runCatching { java.time.Instant.parse(early).toEpochMilli() > System.currentTimeMillis() }.getOrDefault(false)
             val locked = o.optBoolean("is_premium") || o.optBoolean("is_locked") || earlyLocked
-            AsuraChapter(n, o.optString("title"), locked, SITE + "/comics/" + slug + "/chapter/" + n)
+            AsuraChapter(n, o.optString("title"), locked, SITE + "/comics/" + currentSlug + "/chapter/" + n)
         }.sortedByDescending { it.number.toDoubleOrNull() ?: -1.0 }
     }
 
@@ -169,6 +204,21 @@ private object AsuraScansApi {
         else -> v
     }
 
+    private fun findString(root: JSONObject, name: String): String? {
+        root.optString(name).takeIf { it.isNotBlank() && it != "null" }?.let { return it }
+        val it = root.keys()
+        while (it.hasNext()) {
+            when (val value = root.opt(it.next())) {
+                is JSONObject -> findString(value, name)?.let { found -> return found }
+                is JSONArray -> for (i in 0 until value.length()) {
+                    val child = value.optJSONObject(i)
+                    if (child != null) findString(child, name)?.let { found -> return found }
+                }
+            }
+        }
+        return null
+    }
+
     private fun findArray(root: JSONObject, name: String): JSONArray? {
         root.optJSONArray(name)?.let { return it }
         val it = root.keys()
@@ -197,6 +247,9 @@ internal fun AsuraScansScreen(startUrl: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
     var rows by remember { mutableStateOf<List<AsuraSeries>>(emptyList()) }
+    var genres by remember { mutableStateOf<List<AsuraGenre>>(emptyList()) }
+    var chosenGenre by remember { mutableStateOf<AsuraGenre?>(null) }
+    var sort by remember { mutableStateOf("latest") }
     var selected by remember { mutableStateOf<AsuraSeries?>(null) }
     var chapters by remember { mutableStateOf<List<AsuraChapter>>(emptyList()) }
     var pages by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -214,7 +267,7 @@ internal fun AsuraScansScreen(startUrl: String, onBack: () -> Unit) {
             if (reset) loading = true else loadingMore = true
             error = ""
             try {
-                val result = AsuraScansApi.catalog(query, start)
+                val result = AsuraScansApi.catalog(query, start, chosenGenre?.slug, sort)
                 rows = if (reset) result.first else (rows + result.first).distinctBy { it.slug }
                 offset = start + result.first.size
                 more = result.second && result.first.isNotEmpty()
@@ -239,7 +292,12 @@ internal fun AsuraScansScreen(startUrl: String, onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(startUrl) { load() }
+    LaunchedEffect(startUrl) {
+        genres = runCatching { AsuraScansApi.genres() }.getOrDefault(emptyList())
+        load()
+    }
+    val quickNames = listOf("Action", "Adventure", "Comedy", "Drama", "Fantasy", "Romance", "Mystery", "Horror")
+    val quickGenres = quickNames.mapNotNull { name -> genres.firstOrNull { it.name.equals(name, true) } }
 
     Column(Modifier.fillMaxSize().background(Color(0xFFFFFBF8))) {
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -251,7 +309,15 @@ internal fun AsuraScansScreen(startUrl: String, onBack: () -> Unit) {
                 }
             }) { Text("←", fontSize = 25.sp, color = Color(0xFF352D2A)) }
             Spacer(Modifier.weight(1f))
-            Text("ASURA SCANS", color = Color(0xFF684A3D), fontWeight = FontWeight.Bold)
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                TextButton(onClick = { menu = true }) { Text("▦", color = Color(0xFF403733), fontSize = 22.sp) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Mais recentes") }, onClick = { menu = false; sort = "latest"; load() })
+                    DropdownMenuItem(text = { Text("Mais populares") }, onClick = { menu = false; sort = "popular"; load() })
+                    DropdownMenuItem(text = { Text("Melhor classificação") }, onClick = { menu = false; sort = "rating"; load() })
+                }
+            }
         }
         Text(if (pages.isNotEmpty()) readerTitle else selected?.title ?: "Asura Scans",
             Modifier.padding(horizontal = 16.dp), color = Color(0xFF211D1C), fontSize = 24.sp,
@@ -299,6 +365,16 @@ internal fun AsuraScansScreen(startUrl: String, onBack: () -> Unit) {
                 OutlinedTextField(query, { query = it }, Modifier.weight(1f), label = { Text("Pesquisar manhwa") }, singleLine = true)
                 Spacer(Modifier.width(7.dp))
                 Button(onClick = { load() }, enabled = !loading && query.isNotBlank()) { Text("Buscar") }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(selected = chosenGenre == null, onClick = { chosenGenre = null; load() }, label = { Text("☷ Géneros") })
+                quickGenres.forEach { genre ->
+                    FilterChip(selected = chosenGenre?.slug == genre.slug, onClick = {
+                        chosenGenre = if (chosenGenre?.slug == genre.slug) null else genre
+                        load()
+                    }, label = { Text(genre.name) })
+                }
             }
             Text(info, Modifier.padding(horizontal = 15.dp, vertical = 4.dp), color = Color(0xFF805A49), fontSize = 11.sp)
             LazyVerticalGrid(GridCells.Adaptive(104.dp), Modifier.weight(1f), contentPadding = PaddingValues(12.dp),
